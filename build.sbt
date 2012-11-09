@@ -1,6 +1,8 @@
 scalaVersion := "2.10.0-RC1"
 
-scalacOptions ++= Seq( "-deprecation", "-unchecked", "-feature" )
+scalacOptions ++= Seq( "-deprecation", "-unchecked", "-feature")
+
+scalacOptions in console += "-Xlog-free-terms"
 
 libraryDependencies += "org.specs2" %% "specs2" % "1.13-SNAPSHOT" % "test"
 

@@ -9,35 +9,57 @@ import scala.reflect.macros.Context
 import TypeOperators._
 
     trait HList {
+      type Self <: HList
       def length: Int
       def isEmpty: Boolean
       def nonEmpty = !isEmpty
+      def last: Any = macro HList.last[Self]
+      def reverse: Any = macro HList.reverse[Self]
+      def init: Any = macro HList.init[Self]
+      def contains[E] = macro HList.contains[Self, E]
+      def find[E]: Any = macro HList.find[Self, E]
+      def filter[E]: Any = macro HList.filter[Self, E]
+      def filterNot[E]: Any = macro HList.filterNot[Self, E]
+      def map[HF <: HList](hf: HF) = macro HList.map[Self, HF]
+      def flatten = macro HList.flatten[Self]
+      def mkString(start: String, sep: String, end: String): String
+      def mkString(sep: String): String
+      def mkString: String
     }
 
     case class ::[H, T <: HList](head: H, tail: T) extends HList {
+      type Self = H :: T
+      type Head = H
       def ::[H](h: H) = macroHList.::(h, this)
       def :+[E](e: E) = macro HList.append[H :: T, E]
-      def last: Any = macro HList.last[H :: T]
-      def reverse: Any = macro HList.reverse[H :: T]
-      def init: Any = macro HList.init[H :: T]
-      def find[E]: Any = macro HList.find[H :: T, E]
-      def filter[E]: Any = macro HList.filter[H :: T, E]
-      def filterNot[E]: Any = macro HList.filterNot[H :: T, E]
-      def map[HF <: HList](hf: HF) = macro HList.map[H :: T, HF]
       def length = 1 + tail.length
       def isEmpty = false
-      override def toString = head.toString + " :: " + tail.toString
+      //override def toString: String = macro HList.print[Self]
+      def mkString(start: String, sep: String, end: String) = 
+        if(tail.isEmpty)
+          start + head + end
+        else
+          start + head + sep + tail.mkString(sep) + end
+      def mkString(sep: String) = mkString("", sep, "")
+      def mkString = mkString("", "", "")
+      override def toString = mkString("HList(", ", ", ")")
     }
 
     trait HNil extends HList {
+      type Self = HNil
       def ::[H](h: H) = macroHList.::(h, this)
       def :+[H](h: H) = macroHList.::(h, this)
       def length = 0
       def isEmpty = true
+      def mkString(start: String, sep: String, end: String) = start + end
+      def mkString(sep: String) = ""
+      def mkString = ""
       override def toString = "HNil"
     }
 
-    case object HNil extends HNil
+    case object HNil extends HNil {
+
+    }
 
     object HList {
       /** Enriched macro context with HList useful reification functions
@@ -62,6 +84,10 @@ import TypeOperators._
             genExpr(c.WeakTypeTag(tpe))
           }
           def splice = toExpr.splice
+          //def print = {
+          //  def genPrint[T: WeakTypeTag]: Expr[String] = reify[String](splice.toString)
+          //  genPrint(c.WeakTypeTag(tpe))
+          //}
           def apply(arg1: AbsExpr): AbsExpr = {
             def genApply[T: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
               AbsExpr(reify(c.Expr[T => R](tree).apply(c.Expr[T](arg1.tree))))
@@ -172,6 +198,9 @@ import TypeOperators._
           def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
           def reduceLeft(l: ListExpr): AbsExpr
           def reduceRight(l: ListExpr): AbsExpr
+          //def mkString(start: Expr[String], sep: Expr[String], end: Expr[String]): Expr[String]
+          //def mkString(sep: Expr[String]): Expr[String]
+          //def mkString: Expr[String]
         }
 
         object ListExpr {
@@ -456,6 +485,20 @@ import TypeOperators._
 
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = (this :+ e).reduceRight(f)
 
+          /*def mkString(start: Expr[String], sep: Expr[String], end: Expr[String]): Expr[String] = {
+            //def genString[T <: HList: WeakTypeTag] =
+            val res = reify(start.splice + head.splice + sep.splice +
+                    tail.mkString(sep).splice + end.splice)
+            c.echo(c.enclosingPosition, show(res))
+            res
+          }
+
+          def mkString(sep: Expr[String]): Expr[String] = mkString(c.literal(""), sep, c.literal(""))
+
+          def mkString: Expr[String] = mkString(c.literal(""), c.literal(""), c.literal(""))
+
+          override def print: Expr[String] = mkString(c.literal("HList("), c.literal(", "), c.literal(")"))*/
+
         }
         object HListExpr {
           def apply[T](expr: Expr[T]): HListExpr = new HListExpr(expr.tree, tpeFromExpr(expr))
@@ -525,6 +568,11 @@ import TypeOperators._
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
           def reduceRight(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
+          //def mkString(start: Expr[String], sep: Expr[String], end: Expr[String]): Expr[String] =
+          //  reify(start.splice + end.splice)
+          //def mkString(sep: Expr[String]): Expr[String] = c.literal("")
+          //def mkString: Expr[String] = c.literal("")
+          //override def print: Expr[String] = c.literal("")
         }
 
       }
@@ -549,6 +597,9 @@ import TypeOperators._
       def init[L <: HList: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).init.toExpr
 
+      def contains[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).contains(c.weakTypeOf[E])
+
       def find[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).find(c.weakTypeOf[E]).toExpr
 
@@ -563,6 +614,11 @@ import TypeOperators._
         (hl.ListExpr(c.Expr[L](c.prefix.tree)).map(hl.ListExpr(hf))).toExpr
       }
 
+      def flatten[L <: HList: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).flatten.toExpr
+
+      //def print[L <: HList: c.WeakTypeTag](c: Context) =
+      //  hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).print
 
   }
 
