@@ -2,8 +2,11 @@ package macroHList
 
 import scala.language.experimental.macros
 import scala.language.implicitConversions
+import scala.language.existentials
+import scala.language.higherKinds
 import scala.reflect.macros.Context
 
+import TypeOperators._
 
     trait HList {
       def length: Int
@@ -13,11 +16,14 @@ import scala.reflect.macros.Context
 
     case class ::[H, T <: HList](head: H, tail: T) extends HList {
       def ::[H](h: H) = macroHList.::(h, this)
-      def :+[T](e: T) = macro HList.append[T]
-      def last: Any = macro HList.last
-      def reverse: Any = macro HList.reverse
-      def init: Any = macro HList.init
-      def map[HF <: HList](hf: HF) = macro HList.map[HF]
+      def :+[E](e: E) = macro HList.append[H :: T, E]
+      def last: Any = macro HList.last[H :: T]
+      def reverse: Any = macro HList.reverse[H :: T]
+      def init: Any = macro HList.init[H :: T]
+      def find[E]: Any = macro HList.find[H :: T, E]
+      def filter[E]: Any = macro HList.filter[H :: T, E]
+      def filterNot[E]: Any = macro HList.filterNot[H :: T, E]
+      def map[HF <: HList](hf: HF) = macro HList.map[H :: T, HF]
       def length = 1 + tail.length
       def isEmpty = false
       override def toString = head.toString + " :: " + tail.toString
@@ -36,7 +42,8 @@ import scala.reflect.macros.Context
     object HList {
       /** Enriched macro context with HList useful reification functions
        */
-      class HListContext(val c: Context) {
+       
+      class HListContext[C <: Context](val c: C) {
         import c.universe._
 
         def isLiteral(tree: Tree): Boolean = tree match {
@@ -47,28 +54,28 @@ import scala.reflect.macros.Context
         def tpeFromExpr[T](expr: Expr[T]): Type =
           if(expr.actualType == null) expr.staticType else expr.actualType.widen
 
-        implicit def tpeToWeakTypeTag[T](tpe: Type): WeakTypeTag[T] = c.WeakTypeTag[T](tpe)
+        //implicit def tpeToWeakTypeTag[T](tpe: Type): WeakTypeTag[T] = c.WeakTypeTag[T](tpe)
 
         class AbsExpr(val tree: Tree, val tpe: Type) {
           def toExpr = {
             def genExpr[T: WeakTypeTag]: Expr[T] = c.Expr[T](tree)
-            genExpr(tpe)
+            genExpr(c.WeakTypeTag(tpe))
           }
           def splice = toExpr.splice
           def apply(arg1: AbsExpr): AbsExpr = {
             def genApply[T: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
               AbsExpr(reify(c.Expr[T => R](tree).apply(c.Expr[T](arg1.tree))))
-            genApply(tpe, arg1.tpe)
+            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe))
           }
           def apply(arg1: AbsExpr, arg2: AbsExpr): AbsExpr = {
             def genApply[T1: WeakTypeTag, T2: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
               AbsExpr(reify(c.Expr[(T1, T2) => R](tree).apply(c.Expr[T1](arg1.tree), c.Expr[T2](arg2.tree))))
-            genApply(tpe, arg1.tpe, arg2. tpe)
+            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe), c.WeakTypeTag(arg2.tpe))
           }
         }
         object AbsExpr {
           def apply(tree: Tree, tpe: Type) = new AbsExpr(tree, tpe)
-          def apply[T](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
+          def apply[T: WeakTypeTag](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
         }
 
         implicit def exprToAbs[T](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
@@ -78,14 +85,14 @@ import scala.reflect.macros.Context
             case TypeRef(_, tup, List(t1, t2)) => {
               def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
                 AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._1))
-              genFirst(t1, t2)
+              genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
             }
           }
           def second: AbsExpr = tpe match {
             case TypeRef(_, tup, List(t1, t2)) => {
               def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
                 AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._2))
-              genFirst(t1, t2)
+              genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
             }
           }
         }
@@ -93,10 +100,35 @@ import scala.reflect.macros.Context
           def apply(e1: AbsExpr, e2: AbsExpr): TupleExpr = {
             def genTuple[T1: WeakTypeTag, T2: WeakTypeTag]: TupleExpr =
               new TupleExpr(reify((c.Expr[T1](e1.tree).splice, c.Expr[T2](e2.tree).splice)).tree, weakTypeOf[(T1, T2)])
-            genTuple(e1.tpe, e2.tpe)
+            genTuple(c.WeakTypeTag(e1.tpe), c.WeakTypeTag(e2.tpe))
           }
         }
 
+        def genericMethodReturnType(m: Symbol, ts: List[Type]): Type = {
+          appliedType(m.asMethod.typeSignature, ts) match {
+            case MethodType(_, r) => r
+          }
+        }
+
+        class Poly1Expr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
+          override def apply(expr: AbsExpr): AbsExpr = {
+            def genApply[HF <: Poly1[Arg1] forSome {type Arg1[X]}: WeakTypeTag, T: WeakTypeTag, Arg1T: WeakTypeTag] =
+              AbsExpr(reify(c.Expr[HF](tree).splice.apply[T](c.Expr[Arg1T](expr.tree).splice)))
+            val arg1Tpe = tpe.baseType(typeOf[Poly1[Arg1] forSome {type Arg1[X]}].typeSymbol) match {
+              case TypeRef(_, sym, List(arg1)) => arg1
+            }
+            val tTpe = expr.tpe match {
+              case TypeRef(_, sym, List(t)) => t
+              case t if t =:= appliedType(arg1Tpe, List(t)) => t
+            }
+            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))))
+          }
+        }
+        object Poly1Expr {
+          def apply[T: WeakTypeTag](expr: Expr[T]): Poly1Expr = new Poly1Expr(expr.tree, tpeFromExpr(expr))
+          def apply(expr: AbsExpr): Poly1Expr = new Poly1Expr(expr.tree, expr.tpe)
+        }
+        
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
           def head: AbsExpr
           def tail: ListExpr
@@ -110,6 +142,7 @@ import scala.reflect.macros.Context
           def filter(t: Type): ListExpr
           def filterNot(t: Type): ListExpr
           def find(t: Type): AbsExpr
+          def find(f: Type => Boolean): AbsExpr
           def apply(i: Expr[Int]): AbsExpr
           def length: Expr[Int]
           def indexOf(t: Type): Expr[Int]
@@ -132,9 +165,9 @@ import scala.reflect.macros.Context
           def unify: ListExpr
           def startsWith(l: ListExpr): Expr[Boolean]
           def endsWith(l: ListExpr): Expr[Boolean]
-          def map(f: ListExpr): ListExpr
+          def map(hf: ListExpr): ListExpr
           def flatten: ListExpr
-          def flatMap(f: ListExpr): ListExpr
+          def flatMap(hf: ListExpr): ListExpr
           def foldLeft(e: AbsExpr)(l: ListExpr): AbsExpr
           def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
           def reduceLeft(l: ListExpr): AbsExpr
@@ -142,12 +175,20 @@ import scala.reflect.macros.Context
         }
 
         object ListExpr {
-          def apply[T](expr: Expr[T]): ListExpr = {
+          def apply[T: WeakTypeTag](expr: Expr[T]): ListExpr = {
             val tpe = tpeFromExpr(expr)
             if(tpe <:< typeOf[HNil])
               HNilExpr
             else if(tpe <:< typeOf[_ :: _])
               HListExpr(expr.tree, tpe)
+            else
+              sys.error("Unknown HList type")
+          }
+          def apply(tree: Tree, tpe: Type): ListExpr = {
+            if(tpe <:< typeOf[HNil])
+              HNilExpr
+            else if(tpe <:< typeOf[_ :: _])
+              HListExpr(tree, tpe)
             else
               sys.error("Unknown HList type")
           }
@@ -183,31 +224,63 @@ import scala.reflect.macros.Context
 
           def init: ListExpr = reverse.tail.reverse
 
-          def contains(t: Type): Expr[Boolean] = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
-            if(found != EmptyTree)
-              reify(true)
-            else
-              tail.contains(t)
-          }
-
           def :+(e: AbsExpr) = head :: (tail :+ e)
 
           def ++(l: ListExpr) = l match {
             case HNilExpr => this
             case hl @ HListExpr(_, _) => hl.tail ++ (hl.head :: l)
           }
+          
+          def typeLookup(t: Type, r: Type): Tree = {
+            def replaceWildcard(t: Type, r: Type): Type = t match {
+              case ExistentialType(List(t1, _*), TypeRef(pre, sym, l)) => TypeRef(pre, sym, l.map(tt =>
+                if(tt =:= t1.asType.toType)
+                  r
+                else
+                  replaceWildcard(tt, r)
+              ))
+              case _ => t
+            }
+            val hiding =
+              if(t.typeConstructor.takesTypeArgs)
+                replaceWildcard(t, r)
+              else
+                appliedType(typeOf[_ <:< _], List(r, t))
+            c.echo(c.enclosingPosition, "Looking for " + hiding)
+            c.inferImplicitValue(hiding)
+          }
 
-          def find(t: Type): AbsExpr = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
+          def contains(t: Type): Expr[Boolean] = {
+            val found = typeLookup(t, head.tpe)
+            if(found != EmptyTree)
+              reify(true)
+            else
+              tail.contains(t)
+          }
+
+          // For internal purposes
+          def find(f: Type => Boolean): AbsExpr = {
+            if(f(head.tpe))
+              head
+            else
+              tail.find(f)
+          }
+
+          def find(t: Type): AbsExpr =
+            find((t: Type) => {
+              lazy val res = typeLookup(t, head.tpe) == EmptyTree
+              res
+            })
+          /*{
+            val found = typeLookup(t, head.tpe)
             if(found != EmptyTree)
               head
             else
               tail.find(t)
-          }
+          }*/
 
           def filter(t: Type): ListExpr = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
+            val found = typeLookup(t, head.tpe) 
             if(found != EmptyTree)
               head :: tail.filter(t)
             else
@@ -215,11 +288,11 @@ import scala.reflect.macros.Context
           }
 
           def filterNot(t: Type): ListExpr = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
+            val found = typeLookup(t, head.tpe)
             if(found == EmptyTree)
-              head :: tail.filter(t)
+              head :: tail.filterNot(t)
             else
-              tail.filter(t)      
+              tail.filterNot(t)      
           }
 
           def apply(i: Expr[Int]): AbsExpr = {
@@ -232,7 +305,7 @@ import scala.reflect.macros.Context
           }
 
           def indexOf(t: Type): Expr[Int] = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
+            val found = c.inferImplicitValue(appliedType(typeOf[_ => _], List(head.tpe, t)))
             if(found != EmptyTree)
               reify(0)
             else
@@ -265,7 +338,7 @@ import scala.reflect.macros.Context
           }
 
           def dropWhile(t: Type): ListExpr = {
-            val found = c.inferImplicitView(head.tree, head.tpe, t)
+            val found = c.inferImplicitValue(appliedType(typeOf[_ => _], List(head.tpe, t)))
             if(found != EmptyTree)
               this
             else
@@ -315,7 +388,7 @@ import scala.reflect.macros.Context
           def toList: AbsExpr = {
             def genList[A: WeakTypeTag]: AbsExpr =
               AbsExpr(reify(c.Expr[A](head.tree).splice :: c.Expr[List[A]](tail.toList.tree).splice))
-            genList(lub(tpes))
+            genList(c.WeakTypeTag(lub(tpes)))
           }
 
           def toArray: AbsExpr = ??? //AbsExpr(reify(toList.splice.toArray))
@@ -330,29 +403,38 @@ import scala.reflect.macros.Context
           def endsWith(l: ListExpr): Expr[Boolean] = ???
             //reify(toList.splice.endsWith(l.toList.splice))
 
-          def map(f: ListExpr): ListExpr = {
-            def mapFun(tpe: Type): Type = 
-              appliedType(typeOf[_ => _], List(tpe, definitions.AnyTpe)) 
-            f.find(mapFun(head.tpe)).apply(head) :: tail.map(f)
-          }
+          /** find applicable function in hf HList for each element of HList
+           *  e.g. for element of type X find Poly1[Arg1] such that
+           *  X <:< Arg1[_]
+           */
+          def map(hf: ListExpr): ListExpr =
+            Poly1Expr(hf.find((t: Type) => {
+              val arg1Tpe = t.baseType(typeOf[Poly1[Arg1] forSome {type Arg1[X]}].typeSymbol) match {
+                case TypeRef(_, sym, List(arg1)) => arg1
+              }
+              head.tpe <:< appliedType(arg1Tpe, List(WildcardType))
+            })).apply(head) :: tail.map(hf)
 
           def flatten: ListExpr = {
             if(head.tpe <:< typeOf[HNil])
               tail.flatten
-            else if(head.tpe <:< typeOf[::[_, _]])
+            else if(head.tpe <:< typeOf[_ :: _])
               (head :: HNilExpr) ++ tail.flatten
             else
               sys.error("Can not flatten HList containing elements of type " + head.tpe)
           }
 
-          def flatMap(f: ListExpr): ListExpr = map(f).flatten
+          def flatMap(hf: ListExpr): ListExpr = map(hf).flatten
 
           def reduceLeft(f: ListExpr): AbsExpr = {
             if(tail == HNilExpr)
               head
             else {
               def reduceFun(t1: Type, t2: Type): Type =
-                appliedType(typeOf[(_, _) => _], List(t1, t2, definitions.AnyTpe))
+                appliedType(typeOf[_ => _], List(
+                  appliedType(typeOf[(_, _)], List(t1, t2)),
+                  definitions.AnyTpe)
+                )
               reduceLeft(f.find(reduceFun(head.tpe, tail.head.tpe)).apply(head, tail.head) :: tail.tail)
             }
           }
@@ -362,7 +444,10 @@ import scala.reflect.macros.Context
               head
             else {
               def reduceFun(t1: Type, t2: Type): Type =
-                appliedType(typeOf[(_, _) => _], List(t1, t2, definitions.AnyTpe))
+                 appliedType(typeOf[_ => _], List(
+                  appliedType(typeOf[(_, _)], List(t1, t2)),
+                  definitions.AnyTpe)
+                )
               reduceRight(f.find(reduceFun(last.tpe, init.last.tpe)).apply(last, init.last) :: init.init)
             }
           }
@@ -380,7 +465,7 @@ import scala.reflect.macros.Context
         
         implicit def exprToHList[H, T <: HList](expr: Expr[H :: T]): HListExpr =
           HListExpr(expr.tree, tpeFromExpr(expr))
- 
+        /* 
         class ListOps[A](l: Expr[List[A]]) {
           def toHList: ListExpr =
             if(l == Nil)
@@ -389,12 +474,13 @@ import scala.reflect.macros.Context
               AbsExpr(reify(l.splice.head)) :: reify(l.splice.tail).toHList 
         }
         implicit def mkListOps[A](l: Expr[List[A]]): ListOps[A] = new ListOps[A](l)
+        */
 
-        case object HNilExpr extends ListExpr(reify{HNil}.tree, typeOf[HNil]) {
-          def ::(e: AbsExpr): HListExpr = {
-            def genCons[E: WeakTypeTag]: HListExpr =
+        case object HNilExpr extends ListExpr(reify(HNil).tree, typeOf[HNil]) {
+          def ::(e: AbsExpr): ListExpr = {
+            def genCons[E: WeakTypeTag]: ListExpr =
               HListExpr(reify(c.Expr[E](e.tree).splice :: HNil))
-            genCons(e.tpe)
+            genCons(c.WeakTypeTag(e.tpe))
           }
           def :+(e: AbsExpr): ListExpr = ::(e)
           def ++(l: ListExpr): ListExpr = l
@@ -405,6 +491,7 @@ import scala.reflect.macros.Context
           def init: ListExpr = sys.error("Init of HNil does not exist")
           def contains(t: Type): Expr[Boolean] = reify(false)
           def find(t: Type): AbsExpr = sys.error("Element of type " + t + " not found")
+          def find(f: Type => Boolean): AbsExpr = sys.error("Element not found")
           def filter(t: Type): ListExpr = HNilExpr
           def filterNot(t: Type): ListExpr = HNilExpr
           def apply(i: Expr[Int]): AbsExpr = sys.error("HNil has no element")
@@ -431,9 +518,9 @@ import scala.reflect.macros.Context
             if(l == HNilExpr) reify(true) else reify(false)
           def endsWith(l: ListExpr): Expr[Boolean] =
             if(l == HNilExpr) reify(true) else reify(false)
-          def map(f: ListExpr): ListExpr = HNilExpr
+          def map(hf: ListExpr): ListExpr = HNilExpr
           def flatten: ListExpr = HNilExpr
-          def flatMap(f: ListExpr) = HNilExpr
+          def flatMap(hf: ListExpr): ListExpr = HNilExpr
           def foldLeft(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
@@ -442,37 +529,39 @@ import scala.reflect.macros.Context
 
       }
 
+      def hListContext(c: Context) = new HListContext[c.type](c)
+
       /** Now mapping functions working on AbsExpr to macro implementations
        *  which are working on plain Expr
        */
       
-      implicit def contextToHListContext(c: Context): HListContext = new HListContext(c)
-
-      def append[E: c.WeakTypeTag](c: Context)(e: c.Expr[E]) = {
-        val d = new HListContext(c)
-        (d.ListExpr(d.c.prefix) :+ d.AbsExpr(e.asInstanceOf[d.c.Expr[E]])).toExpr.asInstanceOf[c.Expr[Any]]
+      def append[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(e: c.Expr[E]) = {
+       val hl = hListContext(c)
+       (hl.ListExpr(c.Expr[L](c.prefix.tree)) :+ hl.AbsExpr(e)).toExpr
       }
 
-      def reverse(c: Context) = {
-        val d = new HListContext(c)
-        (d.ListExpr(d.c.prefix).reverse).toExpr.asInstanceOf[c.Expr[Any]]
-      }
+      def reverse[L <: HList: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).reverse.toExpr
 
-      def last(c: Context): c.Expr[Any] = {
-        val d = new HListContext(c)
-        (d.ListExpr(d.c.prefix).last).toExpr.asInstanceOf[c.Expr[Any]]
-      }
+      def last[L <: HList: c.WeakTypeTag](c: Context): c.Expr[Any] =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).last.toExpr
 
-      def init(c: Context) = {
-        val d = new HListContext(c)
-        (d.ListExpr(d.c.prefix).init).toExpr.asInstanceOf[c.Expr[Any]]
-      }
+      def init[L <: HList: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).init.toExpr
 
-      def map[L <: HList: c.WeakTypeTag](c: Context)(hf: c.Expr[HList]) = {
-        val d = new HListContext(c)
-        (d.ListExpr(d.c.prefix) map d.ListExpr(hf.asInstanceOf[d.c.Expr[HList]])).toExpr.asInstanceOf[c.Expr[Any]]
-      }
+      def find[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).find(c.weakTypeOf[E]).toExpr
 
+      def filter[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).filter(c.weakTypeOf[E]).toExpr
+
+      def filterNot[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).filterNot(c.weakTypeOf[E]).toExpr
+
+      def map[L <: HList: c.WeakTypeTag, HF <: HList: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).map(hl.ListExpr(hf))).toExpr
+      }
 
 
   }
