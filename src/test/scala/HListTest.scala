@@ -5,17 +5,29 @@ import org.specs2.mutable._
 import org.junit.runner.RunWith
 import org.specs2.runner.JUnitRunner
 
+import scala.math.Numeric._
+import scala.math.Numeric.Implicits._
+
 import macroHList._
+import HList._
 import TypeOperators._
+import Poly._
 
 @RunWith(classOf[JUnitRunner])
 class HlistTest extends SpecificationWithJUnit {
 
   val nehl = 1 :: "Hey" :: true :: HNil
-  val identity = new Poly1[Id] { def apply[T](x: T) = x }
-  val lift = new Poly1[Id] { def apply[T](x: T): Option[T] = Some(x) }
-  val unlift = new Poly1[Option] { def apply[T](x: Option[T]) = x.get }
-  val hlistify = new Poly1[Id] { def apply[T](x: T) = x :: HNil}
+  val nums = 21 :: 2.3 :: 4.6f :: HNil
+  val identity = new Poly1[Id, ForAll] { def apply[T: ForAll](x: T) = x }
+  val lift = new Poly1[Id, ForAll] { def apply[T: ForAll](x: T): Option[T] = Some(x) }
+  val unlift = new Poly1[Option, ForAll] { def apply[T: ForAll](x: Option[T]) = x.get }
+  val hlistify = new Poly1[Id, ForAll] { def apply[T: ForAll](x: T) = x :: HNil}
+  val inc = new Poly1[Id, Numeric] {
+    def apply[T: Numeric](x: T) = x + implicitly[Numeric[T]].fromInt(1)
+  }
+  val dec = new Poly1[Id, Numeric] {
+    def apply[T: Numeric](x: T) = x - implicitly[Numeric[T]].fromInt(1)
+  }
 
   "A non empty HList" should {
     "be non empty" in {
@@ -57,6 +69,12 @@ class HlistTest extends SpecificationWithJUnit {
     }
     "be itself after HListifying and flattening" in {
       nehl.map(hlistify :: HNil).flatten must beEqualTo(nehl)
+    }
+    "be itself after incrementing and decrementing" in {
+      nums.map(inc :: HNil).map(dec :: HNil) must beEqualTo(nums)
+    }
+    "be itself after being split and concatenated" in {
+      nehl.splitAt(1)._1 ++ nehl.splitAt(1)._2 must beEqualTo(nehl)
     }
 
   }
