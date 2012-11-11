@@ -24,8 +24,12 @@ import Poly._
       def reverse: Any = macro HList.reverse[Self]
       def init: Any = macro HList.init[Self]
       def ++[L2 <: HList](l2: L2): Any = macro HList.++[Self, L2]
-      def contains[E] = macro HList.contains[Self, E]
-      def find[E]: Any = macro HList.find[Self, E]
+      def updated[E](i: Int, e: E): Any = macro HList.updated[Self, E]
+      def contains[E]: Boolean = macro HList.containsType[Self, E]
+      def contains[E](e: E): Boolean = macro HList.contains[Self, E]
+      def diff[L2 <: HList](l2: L2): Any = macro HList.diff[Self, L2]
+      def find[E]: Any = macro HList.findType[Self, E]
+      def find[E](f: E => Boolean): Any = macro HList.find[Self, E]
       def filter[E]: Any = macro HList.filter[Self, E]
       def filterNot[E]: Any = macro HList.filterNot[Self, E]
       def map[HF <: HList](hf: HF) = macro HList.map[Self, HF]
@@ -49,6 +53,9 @@ import Poly._
       def zipWithIndex: Any = macro HList.zipWithIndex[Self]
       def toList: Any = macro HList.toList[Self]
       def toArray: Any = macro HList.toArray[Self]
+      def startsWith[L2 <: HList](l2: L2): Boolean = macro HList.startsWith[Self, L2]
+      def endsWith[L2 <: HList](l2: L2): Boolean = macro HList.endsWith[Self, L2]
+      def count[HF <: HList](hf: HF): Int = macro HList.count[Self, HF]
       def mkString(start: String, sep: String, end: String): String
       def mkString(sep: String): String
       def mkString: String
@@ -179,22 +186,35 @@ import Poly._
           }
         }
 
-        class Poly1Expr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
-          override def apply(expr: AbsExpr): AbsExpr = {
-            val (arg1Tpe, argImplTpe) =
-              tpe.baseType(typeOf[Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}].typeSymbol) match {
-              case TypeRef(_, _, List(arg1, argImpl)) => (arg1, argImpl)
+        case class Poly1Expr(hf: ListExpr) {
+ 
+          def apply(expr: AbsExpr): AbsExpr = {
+        
+            def test(tpe: Type): (Tree, Type, Type) = {
+              val (arg1Tpe, argImplTpe) =
+                tpe.baseType(typeOf[Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}].typeSymbol) match {
+                case TypeRef(_, _, List(arg1, argImpl)) => (arg1, argImpl)
+              }
+              val argImplTTpe = appliedType(argImplTpe, List(expr.tpe)).normalize
+              c.echo(c.enclosingPosition, "argImplTTpe " + argImplTTpe)
+              val found = c.inferImplicitValue(argImplTTpe)
+              (found, arg1Tpe, argImplTpe)
             }
-            val argImplTTpe = appliedType(argImplTpe, List(expr.tpe)).normalize
-            c.echo(c.enclosingPosition, "argImplTTpe " + argImplTTpe)
-            val found = c.inferImplicitValue(argImplTTpe)
-            //val argImpT = c.eval(c.Expr(c.resetAllAttrs(found.duplicate))(c.WeakTypeTag(argImpTTpe)))
-            if(found == EmptyTree)
-              sys.error("Oops")
+
+            val poly = hf.find((t: Type) => {
+              val (found, arg1Tpe, argImplTpe) = test(t)
+              if(found == EmptyTree)
+                false
+              else
+                expr.tpe <:< appliedType(arg1Tpe, List(WildcardType))
+            })
+
+            val (found, arg1Tpe, argImplTpe) = test(poly.tpe)
+
             def genApply[HF <: Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}: WeakTypeTag,
                          T: WeakTypeTag, Arg1T: WeakTypeTag, ArgImplT: WeakTypeTag] = {
               val reifee = reify{
-                c.Expr[HF](tree).splice.apply[T](c.Expr[Arg1T](expr.tree).splice)(c.Expr[ArgImplT](found).splice)
+                c.Expr[HF](poly.tree).splice.apply[T](c.Expr[Arg1T](expr.tree).splice)(c.Expr[ArgImplT](found).splice)
               }
               c.echo(c.enclosingPosition, "Poly1 reifee " + show(reifee))
               AbsExpr(reifee)
@@ -203,13 +223,9 @@ import Poly._
               case TypeRef(_, sym, List(t)) => t
               case t if t =:= appliedType(arg1Tpe, List(t)) => t
             }
-            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))),
+            genApply(c.WeakTypeTag(poly.tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))),
               c.WeakTypeTag(appliedType(argImplTpe, List(tTpe))))
           }
-        }
-        object Poly1Expr {
-          def apply[T: WeakTypeTag](expr: Expr[T]): Poly1Expr = new Poly1Expr(expr.tree, tpeFromExpr(expr))
-          def apply(expr: AbsExpr): Poly1Expr = new Poly1Expr(expr.tree, expr.tpe)
         }
         
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
@@ -222,10 +238,13 @@ import Poly._
           def last: AbsExpr
           def init: ListExpr
           def contains(t: Type): Expr[Boolean]
+          def contains(e: AbsExpr): Expr[Boolean]
+          def diff(l: ListExpr): ListExpr
           def filter(t: Type): ListExpr
           def filterNot(t: Type): ListExpr
           def find(t: Type): AbsExpr
           def find(f: Type => Boolean): AbsExpr
+          def find(f: AbsExpr): AbsExpr
           def apply(i: Expr[Int]): AbsExpr
           def length: Expr[Int]
           def indexOf(t: Type): Expr[Int]
@@ -258,6 +277,7 @@ import Poly._
           def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
           def reduceLeft(l: ListExpr): AbsExpr
           def reduceRight(l: ListExpr): AbsExpr
+          def count(hf: ListExpr): Expr[Int]
         }
 
         object ListExpr {
@@ -341,6 +361,18 @@ import Poly._
             else
               tail.contains(t)
           }
+          def contains(e: AbsExpr): Expr[Boolean] = {
+            reify(c.Expr[Any](head.tree).splice == c.Expr[Any](e.tree).splice ||
+                  c.Expr[Boolean](tail.contains(e).tree).splice)
+          }
+
+          def diff(l: ListExpr): ListExpr = ???
+          /*{
+            if()
+              tail.diff(l)
+            else
+              head :: tail.diff(l)
+          }*/
 
           // For internal purposes
           def find(f: Type => Boolean): AbsExpr = {
@@ -356,6 +388,15 @@ import Poly._
               res
             })
 
+          def find(f: AbsExpr): AbsExpr = {
+            val tpe = f.tpe match {
+              case TypeRef(_, _, List(e, b)) => e
+            }
+            def genFind[E: WeakTypeTag] =
+              AbsExpr(reify(c.Expr[List[E]](filter(tpe).toList.tree).splice.find(c.Expr[E => Boolean](f.tree).splice)))
+            genFind(c.WeakTypeTag(tpe))
+          }
+
           def filter(t: Type): ListExpr = {
             val found = typeLookup(t, head.tpe) 
             if(found != EmptyTree)
@@ -363,6 +404,10 @@ import Poly._
             else
               tail.filter(t)
           }
+
+          //def filter(e: AbsExpr): ListExpr = {
+          //  
+          //}
 
           def filterNot(t: Type): ListExpr = {
             val found = typeLookup(t, head.tpe)
@@ -448,7 +493,7 @@ import Poly._
             if(c.eval(c.Expr[Int](c.resetAllAttrs(i.tree.duplicate))) == 0)
               e :: tail
             else
-              head :: updated(reify(i.splice - 1), e)
+              head :: tail.updated(reify(i.splice - 1), e)
           }
 
           def zip(l: ListExpr): ListExpr = {
@@ -496,29 +541,25 @@ import Poly._
 
           def unify: ListExpr = ??? // reify(toList.splice).toHList
 
-          def startsWith(l: ListExpr): Expr[Boolean] = ???
-            //reify(toList.splice.startsWith(l.toList.splice))
+          def startsWith(l: ListExpr): Expr[Boolean] = {
+            if(l == HNilExpr)
+              reify(true)
+            else
+              reify(c.Expr[Any](head.tree).splice == c.Expr[Any](l.head.tree).splice &&
+                    c.Expr[Boolean](tail.startsWith(l.tail).tree).splice)
+          }
 
-          def endsWith(l: ListExpr): Expr[Boolean] = ???
-            //reify(toList.splice.endsWith(l.toList.splice))
+          def endsWith(l: ListExpr): Expr[Boolean] = reverse.startsWith(l.reverse)
 
           /** find applicable function in hf HList for each element of HList
            *  e.g. for element of type X find Poly1[Arg1] such that
            *  X <:< Arg1[_]
            */
-          def map(hf: ListExpr): ListExpr =
-            Poly1Expr(hf.find((t: Type) => {
-              val (arg1Tpe, argImplTpe) =
-                t.baseType(typeOf[Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}].typeSymbol) match {
-                  case TypeRef(_, sym, List(arg1, argImpl)) => (arg1, argImpl)
-                }
-              val argImplTTpe = appliedType(argImplTpe, List(head.tpe)).normalize
-              val found = c.inferImplicitValue(argImplTTpe)
-              if(found == EmptyTree)
-                false
-              else
-                head.tpe <:< appliedType(arg1Tpe, List(WildcardType))
-            })).apply(head) :: tail.map(hf)
+
+          def map(hf: ListExpr): ListExpr = Poly1Expr(hf).apply(head) :: tail.map(hf)
+
+          def count(hf: ListExpr): Expr[Int] =
+            reify(c.Expr[List[Boolean]](map(hf).toList.tree).splice.map(b => if(b) 1 else 0).reduceLeft(_ + _))
 
           def flatten: ListExpr = ListExpr(head.tree, head.tpe) ++ tail.flatten
 
@@ -582,8 +623,11 @@ import Poly._
           def last: AbsExpr = sys.error("Last of HNil does not exist")
           def init: ListExpr = sys.error("Init of HNil does not exist")
           def contains(t: Type): Expr[Boolean] = reify(false)
+          def contains(e: AbsExpr): Expr[Boolean] = reify(false)
+          def diff(l: ListExpr): ListExpr = HNilExpr
           def find(t: Type): AbsExpr = sys.error("Element of type " + t + " not found")
           def find(f: Type => Boolean): AbsExpr = sys.error("Element not found")
+          def find(f: AbsExpr): AbsExpr = reify(None)
           def filter(t: Type): ListExpr = HNilExpr
           def filterNot(t: Type): ListExpr = HNilExpr
           def apply(i: Expr[Int]): AbsExpr = sys.error("HNil has no element")
@@ -624,6 +668,7 @@ import Poly._
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
           def reduceRight(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
+          def count(hf: ListExpr): Expr[Int] = reify(0)
         }
 
         /*
@@ -666,11 +711,31 @@ import Poly._
         (hl.ListExpr(c.Expr[L](c.prefix.tree)).++(hl.ListExpr(l2))).toExpr
       }
 
-      def contains[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+      def updated[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(i: c.Expr[Int], e: c.Expr[E]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).updated(i, hl.AbsExpr(e))).toExpr
+      }
+
+      def containsType[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).contains(c.weakTypeOf[E])
 
-      def find[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+      def contains[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(e: c.Expr[E]) = {
+        val hl = hListContext(c)
+        hl.ListExpr(c.Expr[L](c.prefix.tree)).contains(hl.AbsExpr(e))
+      }
+
+      def diff[L <: HList: c.WeakTypeTag, L2 <: HList: c.WeakTypeTag](c: Context)(l2: c.Expr[L2]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).diff(hl.ListExpr(l2))).toExpr     
+      }
+
+      def findType[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).find(c.weakTypeOf[E]).toExpr
+
+      def find[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(f: c.Expr[E => Boolean]) = {
+        val hl = hListContext(c)
+        hl.ListExpr(c.Expr[L](c.prefix.tree)).find(hl.AbsExpr(f)).toExpr
+      }
 
       def filter[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).filter(c.weakTypeOf[E]).toExpr
@@ -748,6 +813,21 @@ import Poly._
 
       def toArray[L <: HList: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).toArray.toExpr
+
+      def startsWith[L <: HList: c.WeakTypeTag, L2 <: HList: c.WeakTypeTag](c: Context)(l2: c.Expr[L2]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).startsWith(hl.ListExpr(l2)))   
+      }
+
+      def endsWith[L <: HList: c.WeakTypeTag, L2 <: HList: c.WeakTypeTag](c: Context)(l2: c.Expr[L2]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).endsWith(hl.ListExpr(l2)))   
+      }
+
+      def count[L <: HList: c.WeakTypeTag, HF <: HList: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).count(hl.ListExpr(hf)))   
+      }
 
       //def toHList[L <: List[A] forSome {type A}](c: Context) =
       //  hListContext(c).toHList(c.Expr[L](c.prefix.tree)).toExpr
