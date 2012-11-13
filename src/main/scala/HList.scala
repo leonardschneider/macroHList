@@ -23,22 +23,51 @@ import Poly._
       def last: Any = macro HList.last[Self]
       def reverse: Any = macro HList.reverse[Self]
       def init: Any = macro HList.init[Self]
+      /** Concatenate two HLists together.
+       */
       def ++[L2 <: HList](l2: L2): Any = macro HList.++[Self, L2]
       def updated[E](i: Int, e: E): Any = macro HList.updated[Self, E]
+      /** Tell whether the HList contains an element of type E or not.
+       */
       def contains[E]: Boolean = macro HList.containsType[Self, E]
       def contains[E](e: E): Boolean = macro HList.contains[Self, E]
       def diff[L2 <: HList](l2: L2): Any = macro HList.diff[Self, L2]
+      /** Find first element of type E in this HList
+       */
       def find[E]: Any = macro HList.findType[Self, E]
       def find[E](f: E => Boolean): Any = macro HList.find[Self, E]
+      /** Filter the HList so only elements of type E remains.
+       *  If E is an existential type, it is used as witness.
+       *  Combined with TypeOperators, it enables to build complex filters,
+       *  such as conjunctions, disjunctions, etc
+       */
       def filter[E]: Any = macro HList.filter[Self, E]
+      /** The complementary of filter
+       */
       def filterNot[E]: Any = macro HList.filterNot[Self, E]
+      /** Transform this HList by applying the first applicable Poly1 function
+       *  in the given HList as argument.
+       */
       def map[HF <: HList](hf: HF) = macro HList.map[Self, HF]
+      /** Flatten an HList of HLists to an HList.
+       */
       def flatten = macro HList.flatten[Self]
+      /** Get the i-th element of this HList. Only compile time known index is allowed.
+       */
       def apply(i: Int): Any = macro HList.getIndex[Self]
-      def indexOf[E]: Int = macro HList.indexOf[Self, E]
-      def indexOf[E](from: Int): Int = macro HList.indexOfFrom[Self, E]
+      /** Returns the index of the first element of type E in this HList.
+       */
+      def indexOfType[E]: Int = macro HList.indexOfType[Self, E]
+      def indexOfType[E](from: Int): Int = macro HList.indexOfTypeFrom[Self, E]
+      def indexOf[E](e: E): Int = macro HList.indexOf[Self, E]
+      def indexOf[E](e: E, from: Int): Int = macro HList.indexOfFrom[Self, E]
+      /** Returns the index of the last element of type E in this HList.
+       */
       def lastIndexOf[E]: Int = macro HList.lastIndexOf[Self, E]
       def lastIndexOf[E](end: Int): Int = macro HList.lastIndexOfEnd[Self, E]
+      /** Take the first i elements of this HList. Only compile time known number is allowed
+       *  as argument.
+       */
       def take(i: Int): Any = macro HList.take[Self]
       def takeRight(i: Int): Any = macro HList.takeRight[Self]
       def drop(i: Int): Any = macro HList.drop[Self]
@@ -47,11 +76,20 @@ import Poly._
       def dropWhile[E]: Any = macro HList.dropWhile[Self, E]
       def span[E]: Any = macro HList.span[Self, E]
       def splitAt(i: Int): Any = macro HList.splitAt[Self]
+      /** Unzip an HList of tuples to a tuple of HLists. Does not compile if the HList
+       *  does not only contains tuples.
+       */
       def unzip: Any = macro HList.unzip[Self]
+      /** Zip two HLists to an HList of tuples.
+       */
       def zip[L2 <: HList](l2: L2): Any = macro HList.zip[Self, L2]
       def zipAll[L2 <: HList, E1, E2](l2: L2, e1: E2, e2: E2): Any = macro HList.zipAll[Self, L2, E1, E2]
       def zipWithIndex: Any = macro HList.zipWithIndex[Self]
+      /** Transform this HList to a standard List of the least upper bound type of the HList elements.
+       */
       def toList: Any = macro HList.toList[Self]
+      /** Transform this HList to a standard Array of the least upper bound type of the HList elements.
+       */
       def toArray: Any = macro HList.toArray[Self]
       def startsWith[L2 <: HList](l2: L2): Boolean = macro HList.startsWith[Self, L2]
       def endsWith[L2 <: HList](l2: L2): Boolean = macro HList.endsWith[Self, L2]
@@ -249,6 +287,8 @@ import Poly._
           def length: Expr[Int]
           def indexOf(t: Type): Expr[Int]
           def indexOf(t: Type, from: Expr[Int], offset: Expr[Int] = reify(0)): Expr[Int]
+          def indexOf(e: AbsExpr): Expr[Int]
+          def indexOf(e: AbsExpr, from: Expr[Int]): Expr[Int]
           def lastIndexOf(t: Type): Expr[Int]
           def lastIndexOf(t: Type, end: Expr[Int], offset: Expr[Int] = reify(0)): Expr[Int]
           def take(i: Expr[Int]): ListExpr
@@ -365,7 +405,7 @@ import Poly._
             reify(c.Expr[Any](head.tree).splice == c.Expr[Any](e.tree).splice ||
                   c.Expr[Boolean](tail.contains(e).tree).splice)
           }
-
+          // if we have diff, we have distinct
           def diff(l: ListExpr): ListExpr = ???
           /*{
             if()
@@ -405,7 +445,7 @@ import Poly._
               tail.filter(t)
           }
 
-          //def filter(e: AbsExpr): ListExpr = {
+          //def filter(f: ListExpr): ListExpr = {
           //  
           //}
 
@@ -434,6 +474,15 @@ import Poly._
             }
             tail.indexOf(t, from, reify(offset.splice + 1))
           }
+
+          def indexOf(e: AbsExpr, from: Expr[Int]): Expr[Int] = {
+            def genIndexOf[L: WeakTypeTag, E: WeakTypeTag] =
+              reify(c.Expr[List[L]](toList.tree).splice.indexOf(c.Expr[E](e.tree).splice, from.splice))
+            //c.echo(c.enclosingPosition, "e.tpe " + e.tpe)
+            genIndexOf(c.WeakTypeTag(lub(tpes)), c.WeakTypeTag(e.tpe))
+          }
+
+          def indexOf(e: AbsExpr): Expr[Int] = indexOf(e, reify(0))
 
           def lastIndexOf(t: Type, end: Expr[Int], offset: Expr[Int] = reify(0)): Expr[Int] = {
             val i = reverse.indexOf(t, reify(length.splice - 1 - end.splice), offset)
@@ -633,6 +682,8 @@ import Poly._
           def apply(i: Expr[Int]): AbsExpr = sys.error("HNil has no element")
           def indexOf(t: Type): Expr[Int] = reify(-1)
           def indexOf(t: Type, from: Expr[Int], offset: Expr[Int] = reify(0)): Expr[Int] = reify(-1)
+          def indexOf(e: AbsExpr): Expr[Int] = reify(-1)
+          def indexOf(e: AbsExpr, from: Expr[Int]) = reify(-1)
           def lastIndexOf(t: Type): Expr[Int] = reify(-1)
           def lastIndexOf(t: Type, from: Expr[Int], offset: Expr[Int] = reify(0)): Expr[Int] = reify(-1)
           def length: Expr[Int] = reify(0)
@@ -678,6 +729,29 @@ import Poly._
           else
             AbsExpr(reify(l.splice.head)) :: toHList(reify(l.splice.tail))
         */
+
+        /**
+         *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
+         */
+
+        def fromTuple(tup: AbsExpr): ListExpr = {
+          // get the tuple symbol tupleX
+          val tupSym = tup.tpe.baseClasses.find(_.fullName.matches("scala.Tuple[0-9]+")).get
+          c.info(NoPosition, "Found tuple type: " + tupSym, false)
+          // get the tuple arity
+          val tupArity = tupSym.fullName.drop("scala.Tuple".length).toInt
+          c.info(NoPosition, "Tuple has arity: " + tupArity, false)
+          // get tuple element trees
+          val tupTrees = (1 to tupArity).map(i =>
+            treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(newTermName("_" + i))))
+          c.info(NoPosition, "Building tuple trees:\n" + tupTrees.mkString("\n"), false)
+          // get tuple element types
+          val tupTpes = tup.tpe match {
+            case TypeRef(_, _, tpes) => tpes
+          }
+          // transform tuple trees and types to AbsExpr and build the ListExpr
+          tupTrees.zip(tupTpes).map{case ((expr, tpe)) => AbsExpr(expr, tpe)}.foldRight(HNilExpr: ListExpr)(_ :: _)
+        }
 
       }
 
@@ -754,11 +828,21 @@ import Poly._
       def getIndex[L <: HList: c.WeakTypeTag](c: Context)(i: c.Expr[Int]) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).apply(i).toExpr
 
-      def indexOf[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
+      def indexOfType[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).indexOf(c.weakTypeOf[E])
 
-      def indexOfFrom[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(from: c.Expr[Int]) =
+      def indexOfTypeFrom[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(from: c.Expr[Int]) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).indexOf(c.weakTypeOf[E], from)
+
+      def indexOf[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(e: c.Expr[E]) = {
+        val hl = hListContext(c)
+        hl.ListExpr(c.Expr[L](c.prefix.tree)).indexOf(hl.AbsExpr(e))
+      }
+
+      def indexOfFrom[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context)(e: c.Expr[E], from: c.Expr[Int]) = {
+        val hl = hListContext(c)
+        hl.ListExpr(c.Expr[L](c.prefix.tree)).indexOf(hl.AbsExpr(e), from)
+      }
 
       def lastIndexOf[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).lastIndexOf(c.weakTypeOf[E])
@@ -831,6 +915,13 @@ import Poly._
 
       //def toHList[L <: List[A] forSome {type A}](c: Context) =
       //  hListContext(c).toHList(c.Expr[L](c.prefix.tree)).toExpr
+
+      def fromTuple[T](tup: T) = macro fromTupleImpl[T]
+
+      def fromTupleImpl[T: c.WeakTypeTag](c: Context)(tup: c.Expr[T]) = {
+        val hl = hListContext(c)
+        hl.fromTuple(hl.AbsExpr(tup)).toExpr
+      }
 
   }
 
