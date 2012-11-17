@@ -58,7 +58,7 @@ class HlistTest extends SpecificationWithJUnit {
       nehl.filterNot[Any] must beEqualTo(HNil)
     }
     "contain its head" in {
-      nehl.contains[nehl.Head] must beTrue
+      nehl.containsType[nehl.Head] must beTrue
     }
     /*"contain its last element" in {
       val last = nehl.last

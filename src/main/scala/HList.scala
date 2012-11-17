@@ -29,12 +29,12 @@ import Poly._
       def updated[E](i: Int, e: E): Any = macro HList.updated[Self, E]
       /** Tell whether the HList contains an element of type E or not.
        */
-      def contains[E]: Boolean = macro HList.containsType[Self, E]
+      def containsType[E]: Boolean = macro HList.containsType[Self, E]
       def contains[E](e: E): Boolean = macro HList.contains[Self, E]
       def diff[L2 <: HList](l2: L2): Any = macro HList.diff[Self, L2]
       /** Find first element of type E in this HList
        */
-      def find[E]: Any = macro HList.findType[Self, E]
+      def findType[E]: Any = macro HList.findType[Self, E]
       def find[E](f: E => Boolean): Any = macro HList.find[Self, E]
       /** Filter the HList so only elements of type E remains.
        *  If E is an existential type, it is used as witness.
@@ -97,6 +97,9 @@ import Poly._
       def mkString(start: String, sep: String, end: String): String
       def mkString(sep: String): String
       def mkString: String
+      def toTuple: Any = macro HList.toTuple[Self]
+      def toClass: Any = macro HList.toClass[Self]
+      def reduce[F](f: F): Any = macro HList.reduce[Self, F]
     }
 
     case class ::[H, T <: HList](head: H, tail: T) extends HList {
@@ -170,6 +173,7 @@ import Poly._
             case _ => false
           }
           override def hashCode = tree.hashCode + 41 * tpe.hashCode
+          override def toString = "AbsExpr(" + show(tree) + ": " + tpe + ")"
         }
         object AbsExpr {
           def apply(tree: Tree, tpe: Type) = new AbsExpr(tree, tpe)
@@ -265,6 +269,49 @@ import Poly._
               c.WeakTypeTag(appliedType(argImplTpe, List(tTpe))))
           }
         }
+        /*
+        class Poly2Expr(hf: ListExpr) {
+          
+          def apply(expr1: AbsExpr, expr2: AbsExpr): AbsExpr = {
+ 
+            def getPolyTypes(hfTpe: Type): (Type, Type, Type) = {
+              val (arg1Tpe, arg2Tpe, argImplTpe) =
+                hfTpe.baseType(typeOf[Poly2[Arg1, Arg2, ArgImpl] forSome {type Arg1[X]; type Arg2[X]; type ArgImpl[X]}].typeSymbol) match {
+                case TypeRef(_, _, List(arg1, arg2, argImpl)) => (arg1, arg2, argImpl)
+              }
+              (arg1Tpe, arg2Tpe, argImplTpe)
+            }
+
+            val poly = hf.find((hfTpe: Type) => {
+              val (arg1Tpe, arg2Tpe, argImplTpe) = getPolyTypes(hfTpe)
+              val t1Tpe = expr1.tpe match {
+                case TypeRef(_, sym,  
+              }
+              if(found == EmptyTree)
+                false
+              else
+                expr1.tpe <:< appliedType(arg1Tpe, List(WildcardType)) &&
+                expr2.tpe <:< appliedType(arg2Tpe, List(WildcardType))
+            })
+
+            val (found, arg1Tpe, arg2Tpe, argImplTpe) = test(poly.tpe)
+
+            def genApply[HF <: Poly2[Arg1, Arg2, ArgImpl] forSome {
+                         type Arg1[X]; type Arg2[X]; type ArgImpl[X]}: WeakTypeTag,
+                         T: WeakTypeTag, Arg1T: WeakTypeTag, Arg2T: WeakTypeTag, ArgImplT: WeakTypeTag] = {
+              val reifee = reify{
+                c.Expr[HF](poly.tree).splice.apply[T](c.Expr[Arg1T](expr1.tree).splice,
+                                                      c.Expr[Arg2T](expr2.tree).splice)(c.Expr[ArgImplT](found).splice)
+              }
+              c.info(c.enclosingPosition, "Poly2 reifee " + show(reifee), false)
+              AbsExpr(reifee)
+            }
+            genApply(c.WeakTypeTag(poly.tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))),
+              c.WeakTypeTag(appliedType(arg2Tpe, List(tTpe))), c.WeakTypeTag(appliedType(argImplTpe, List(tTpe))))
+          }
+
+        }
+        */
         
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
           def head: AbsExpr
@@ -317,7 +364,15 @@ import Poly._
           def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
           def reduceLeft(l: ListExpr): AbsExpr
           def reduceRight(l: ListExpr): AbsExpr
+          def reduce(f: AbsExpr): AbsExpr = {
+            val res = treeBuild.mkMethodCall(f.tree, trees)
+            AbsExpr(c.Expr(res))
+          }
           def count(hf: ListExpr): Expr[Int]
+          def toTuple: AbsExpr
+          def toClass: AbsExpr
+          def trees: List[Tree]
+          def tpes: List[Type]
         }
 
         object ListExpr {
@@ -328,7 +383,7 @@ import Poly._
             else if(tpe <:< typeOf[_ :: _])
               HListExpr(expr.tree, tpe)
             else
-              sys.error("Unknown HList type")
+              sys.error("Unknown HList type " + tpe)
           }
           def apply(tree: Tree, tpe: Type): ListExpr = {
             if(tpe <:< typeOf[HNil])
@@ -336,7 +391,7 @@ import Poly._
             else if(tpe <:< typeOf[_ :: _])
               HListExpr(tree, tpe)
             else
-              sys.error("Unknown HList type")
+              sys.error("Unknown HList type " + tpe)
           }
           def apply(expr: AbsExpr): ListExpr = ListExpr(expr.tree, expr.tpe)
         }
@@ -360,9 +415,9 @@ import Poly._
           }
 
           def ::(e: AbsExpr): ListExpr = {
-             def genCons[E: WeakTypeTag, H: WeakTypeTag, T <: HList: WeakTypeTag]: ListExpr =
-               ListExpr(reify(new ::(c.Expr[E](e.tree).splice, c.Expr[H :: T](tree).splice)))
-             genCons(c.WeakTypeTag(e.tpe), c.WeakTypeTag(headTpe), c.WeakTypeTag(tailTpe))
+             def genCons[E: WeakTypeTag, L <: HList: WeakTypeTag]: ListExpr =
+               ListExpr(reify(new ::(c.Expr[E](e.tree).splice, c.Expr[L](tree).splice)))
+             genCons(c.WeakTypeTag(e.tpe), c.WeakTypeTag(tpe))
           }
 
           def reverse: ListExpr = tail.reverse :+ head
@@ -444,11 +499,7 @@ import Poly._
             else
               tail.filter(t)
           }
-
-          //def filter(f: ListExpr): ListExpr = {
-          //  
-          //}
-
+          
           def filterNot(t: Type): ListExpr = {
             val found = typeLookup(t, head.tpe)
             if(found == EmptyTree)
@@ -565,11 +616,13 @@ import Poly._
           } 
 
           def zipWithIndex: ListExpr = zip(reverseIndexes.reverse)
-
+          
+          /*
           protected def tpes: List[Type] = tail match {
             case HNilExpr => List(head.tpe)
             case hltail @ HListExpr(_, _) => head.tpe :: hltail.tpes
           }
+          */
 
           def toList: AbsExpr = {
             def genList[A: WeakTypeTag]: AbsExpr =
@@ -586,7 +639,7 @@ import Poly._
             genArray(c.WeakTypeTag(lub(tpes)))
           }
 
-          def tupled: AbsExpr = ???
+          def tupled: AbsExpr = toTuple
 
           def unify: ListExpr = ??? // reify(toList.splice).toHList
 
@@ -640,10 +693,45 @@ import Poly._
             }
           }
 
+          //def reduce(f: AbsExpr): AbsExpr = 
+
           def foldLeft(e: AbsExpr)(f: ListExpr): AbsExpr = (e :: this).reduceLeft(f)
 
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = (this :+ e).reduceRight(f)
 
+          def trees: List[Tree] = head.tree :: tail.trees
+
+          def tpes: List[Type] = head.tpe :: tail.tpes
+
+          def toTuple: AbsExpr = {
+            val length = c.eval(c.Expr[Int](this.length.tree))
+            // Get tuple symbol we're interested in
+            val tupSym = rootMirror.staticModule("scala.Tuple" + length)
+            val tupTree = treeBuild.mkMethodCall(tupSym, newTermName("apply"), tpes, trees)
+            AbsExpr(c.Expr(tupTree))
+          }
+
+          /** Recursive class building based on companion object apply method
+          *  which is supposed to be stored at the HList head, while the
+          *  arguments constitute the tail.
+          */
+          def toClass: AbsExpr = {
+            val applySym = head.tpe.member(newTermName("apply")).asMethod
+            def genArgTrees(l: ListExpr): List[Tree] = {
+              if(l == HNilExpr)
+                Nil
+              else {
+                if(!(l.head.tpe <:< typeOf[HList]))
+                  l.head.tree :: genArgTrees(l.tail)
+                else
+                  ListExpr(l.head).toClass.tree :: genArgTrees(l.tail)
+              }
+            }
+            val argTrees = genArgTrees(tail)
+            c.info(NoPosition, "Generated arg trees:\n" + argTrees.mkString("\n"),
+              System.getProperty("force", "false").toBoolean)
+            AbsExpr(treeBuild.mkMethodCall(applySym, argTrees), applySym.returnType)
+          }
 
 
         }
@@ -720,15 +808,27 @@ import Poly._
           def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
           def reduceRight(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
           def count(hf: ListExpr): Expr[Int] = reify(0)
+          def toTuple: AbsExpr = sys.error("HNil can not be converted to a tuple")
+          def toClass: AbsExpr = sys.error("HNil can not be converted to a class instance")
+          def trees: List[Tree] = Nil
+          def tpes: List[Type] = Nil
+          override def toString = "HNilExpr"
         }
 
-        /*
-        def toHList(l: Expr[List[A] forSome {type A}]): ListExpr =
-          if(c.eval(c.Expr[Boolean](c.resetAllAttrs(reify(l.splice.isEmpty)))) == true)
-            HNilExpr
+        def fromTraversable(list: AbsExpr): ListExpr = {
+          def genSize[L <: Traversable[_]: WeakTypeTag] =
+            reify(c.Expr[L](list.tree).splice.size)
+          val size = genSize(c.WeakTypeTag(list.tpe))
+          if(c.eval(c.Expr[Int](c.resetAllAttrs(size.tree.duplicate))) > 0) {
+            def genList[L <: Traversable[_]: WeakTypeTag] =
+              AbsExpr(reify(c.Expr[L](list.tree).splice.head)) ::
+              fromTraversable(AbsExpr(reify(c.Expr[L](list.tree).splice.tail)))
+                       //reify(c.Expr[Int](size.tree).splice - 1))
+            genList(c.WeakTypeTag(list.tpe))
+          }
           else
-            AbsExpr(reify(l.splice.head)) :: toHList(reify(l.splice.tail))
-        */
+            HNilExpr
+        }
 
         /**
          *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
@@ -736,22 +836,118 @@ import Poly._
 
         def fromTuple(tup: AbsExpr): ListExpr = {
           // get the tuple symbol tupleX
-          val tupSym = tup.tpe.baseClasses.find(_.fullName.matches("scala.Tuple[0-9]+")).get
-          c.info(NoPosition, "Found tuple type: " + tupSym, false)
+          val tupSymOption = tup.tpe.baseClasses.find(_.fullName.matches("scala.Tuple[0-9]+"))
+          if(!tupSymOption.isDefined) {
+            c.info(NoPosition, "Not a tuple, returning single element ListExpr",
+              System.getProperty("force", "false").toBoolean)
+            return tup :: HNilExpr
+          }
+          val tupSym = tupSymOption.get
+          c.info(NoPosition, "Found tuple type: " + tupSym, System.getProperty("force", "false").toBoolean)
           // get the tuple arity
           val tupArity = tupSym.fullName.drop("scala.Tuple".length).toInt
-          c.info(NoPosition, "Tuple has arity: " + tupArity, false)
+          c.info(NoPosition, "Tuple has arity: " + tupArity, System.getProperty("force", "false").toBoolean)
           // get tuple element trees
           val tupTrees = (1 to tupArity).map(i =>
             treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(newTermName("_" + i))))
-          c.info(NoPosition, "Building tuple trees:\n" + tupTrees.mkString("\n"), false)
+          c.info(NoPosition, "Building tuple trees:\n" + tupTrees.mkString("\n"),
+            System.getProperty("force", "false").toBoolean)
           // get tuple element types
           val tupTpes = tup.tpe match {
             case TypeRef(_, _, tpes) => tpes
           }
           // transform tuple trees and types to AbsExpr and build the ListExpr
+          val res =
           tupTrees.zip(tupTpes).map{case ((expr, tpe)) => AbsExpr(expr, tpe)}.foldRight(HNilExpr: ListExpr)(_ :: _)
+          c.info(NoPosition, "Generated ListExpr: " + res, System.getProperty("force", "false").toBoolean)
+          res
         }
+
+        /** Generate an HList with class constructor at its head and constructor arguments as tail.
+         *  TODO: Recursive on args, as long as it can, i.e. a unique apply and unapply function is found
+         *  in companion object.
+         *
+         *  FIXME: Crashes the compiler if function with wildcard is passed as argument
+         */
+
+        def fromClass(clazz: AbsExpr, unapply0: AbsExpr): ListExpr = {
+          // "reducing" functions to values
+          def normUnapply[F: WeakTypeTag] =
+            AbsExpr(reify{val unapply = c.Expr[F](unapply0.tree).splice; unapply})
+          val unapply = normUnapply(c.WeakTypeTag(unapply0.tpe))
+          c.info(NoPosition, "Normalized unapply to: " + unapply, System.getProperty("force", "false").toBoolean)
+          // Unapplying the clazz
+          def genArgs[C: WeakTypeTag, T: WeakTypeTag] =
+            AbsExpr(reify(
+              c.Expr[C => Option[T]](unapply.tree).splice.apply(c.Expr[C](clazz.tree).splice).get
+            ))
+          val tupTpe = unapply.tpe match {
+            case TypeRef(_, _, fun) => fun.last match {
+              case TypeRef(_, _, List(t)) => t
+            }
+          }
+          val args = genArgs(c.WeakTypeTag(clazz.tpe), c.WeakTypeTag(tupTpe))
+          c.info(NoPosition, "Found class unapply args: " + args, System.getProperty("force", "false").toBoolean)
+          val argsList = fromTuple(args)
+          c.info(NoPosition, "Converted tuple to ListExpr: " + argsList,
+            System.getProperty("force", "false").toBoolean)
+          val clazzExpr = AbsExpr(c.Expr(treeBuild.mkAttributedIdent(clazz.tpe.typeSymbol.companionSymbol)))
+          clazzExpr :: argsList
+        }
+
+        /** FIXME: case class with a single field
+         */
+        
+        def fromClass(clazz: AbsExpr): Option[ListExpr] = {
+          // getting companion object symbol
+          val companionSym = clazz.tpe.typeSymbol.companionSymbol
+          if(companionSym == NoSymbol) {
+            c.info(NoPosition, "Haven't found a companion object for: " + clazz.tpe,
+              System.getProperty("force", "false").toBoolean)
+            return None
+          }
+          // getting companion object type
+          val companionTpe = SingleType(NoPrefix, clazz.tpe.typeSymbol.companionSymbol)
+          // gettings unapply methods of the companion object
+          val unapplyMethod = companionTpe.member(newTermName("unapply"))
+          if(unapplyMethod == NoSymbol) {
+             c.info(NoPosition, "Haven't found an unapply method for: " + clazz.tpe,
+              System.getProperty("force", "false").toBoolean) 
+            return None
+          }
+          c.info(NoPosition, "Found unapply method with type signature " + unapplyMethod.asMethod.typeSignature,
+            System.getProperty("force", "false").toBoolean)
+          val argsOption = c.Expr(treeBuild.mkMethodCall(unapplyMethod, List(clazz.tree)))
+          val clazzTypeParams = clazz.tpe match {
+            case TypeRef(_, _, params) => params
+            case _ => Nil
+          }
+          c.info(NoPosition, "Found class parameters: " + clazzTypeParams,
+            System.getProperty("force", "false").toBoolean)
+          val argsList = unapplyMethod.asMethod.returnType match {
+              case TypeRef(_, _, List(returnTpe)) => { // This is an option
+                def genArgs[T: WeakTypeTag] =
+                  AbsExpr(reify(c.Expr[Option[T]](argsOption.tree).splice.get))
+                val args = genArgs(c.WeakTypeTag(appliedType(returnTpe, clazzTypeParams)))
+                fromTuple(args)
+              }
+              case t if t =:= typeOf[Boolean] => HNilExpr
+          }
+          //c.info(NoPosition, "Generated args from unapply: " + args,
+          //  System.getProperty("force", "false").toBoolean)
+          //val argsList = fromTuple(args)
+          // Attempt to further hlistify argsList
+          def genArgsClass(l: ListExpr): ListExpr = {
+            if(l == HNilExpr)
+              l
+            else {
+              fromClass(l.head).getOrElse(l.head) :: genArgsClass(l.tail)
+            }
+          }
+          val clazzExpr = AbsExpr(c.Expr(treeBuild.mkAttributedIdent(clazz.tpe.typeSymbol.companionSymbol)))
+          Some(clazzExpr :: genArgsClass(argsList))
+        }
+
 
       }
 
@@ -898,6 +1094,12 @@ import Poly._
       def toArray[L <: HList: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).toArray.toExpr
 
+      def toTuple[L <: HList: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).toTuple.toExpr
+
+      def toClass[L <: HList: c.WeakTypeTag](c: Context) =
+        hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).toClass.toExpr
+
       def startsWith[L <: HList: c.WeakTypeTag, L2 <: HList: c.WeakTypeTag](c: Context)(l2: c.Expr[L2]) = {
         val hl = hListContext(c)
         (hl.ListExpr(c.Expr[L](c.prefix.tree)).startsWith(hl.ListExpr(l2)))   
@@ -913,14 +1115,42 @@ import Poly._
         (hl.ListExpr(c.Expr[L](c.prefix.tree)).count(hl.ListExpr(hf)))   
       }
 
-      //def toHList[L <: List[A] forSome {type A}](c: Context) =
-      //  hListContext(c).toHList(c.Expr[L](c.prefix.tree)).toExpr
+      def reduce[L <: HList: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(f: c.Expr[F]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).reduce(hl.AbsExpr(f))).toExpr 
+      }
+     
+      /** Converts a tuple of any arity to an HList.
+       *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
+       */
 
       def fromTuple[T](tup: T) = macro fromTupleImpl[T]
 
       def fromTupleImpl[T: c.WeakTypeTag](c: Context)(tup: c.Expr[T]) = {
         val hl = hListContext(c)
         hl.fromTuple(hl.AbsExpr(tup)).toExpr
+      }
+
+      def fromClass[C, U](clazz: C, unapply: U) = macro fromClassImpl[C, U]
+
+      def fromClassImpl[C: c.WeakTypeTag, U: c.WeakTypeTag](c: Context)(clazz: c.Expr[C],
+        unapply: c.Expr[U]) = {
+        val hl = hListContext(c)
+        hl.fromClass(hl.AbsExpr(clazz), hl.AbsExpr(unapply)).toExpr 
+      }
+
+      def fromClass[C](clazz: C) = macro fromClassDirectImpl[C]
+
+      def fromClassDirectImpl[C: c.WeakTypeTag](c: Context)(clazz: c.Expr[C]) = {
+        val hl = hListContext(c)
+        hl.fromClass(hl.AbsExpr(clazz)).get.toExpr
+      }
+
+      def fromTraversable[T <: Traversable[_]](list: T) = macro fromTraversableImpl[T]
+
+      def fromTraversableImpl[T <: Traversable[_]: c.WeakTypeTag](c: Context)(list: c.Expr[T]) = {
+        val hl = hListContext(c)
+        hl.fromTraversable(hl.AbsExpr(list)).toExpr
       }
 
   }
