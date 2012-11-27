@@ -45,10 +45,11 @@ import Poly._
       /** The complementary of filter
        */
       def filterNot[E]: Any = macro HList.filterNot[Self, E]
-      /** Transform this HList by applying the first applicable Poly1 function
-       *  in the given HList as argument.
+      /** Transform this HList by applying hf
        */
-      def map[HF <: HList](hf: HF) = macro HList.map[Self, HF]
+      //def map[HF <: HList](hf: HF) = macro HList.map[Self, HF]
+      def map[HF](hf: HF) = macro HList.map[Self, HF]
+      def flatMap[HF](hf: HF) = macro HList.flatMap[Self, HF]
       /** Flatten an HList of HLists to an HList.
        */
       def flatten = macro HList.flatten[Self]
@@ -222,97 +223,16 @@ import Poly._
           }
         }
 
-        def genericMethodReturnType(m: Symbol, ts: List[Type]): Type = {
-          appliedType(m.asMethod.typeSignature, ts) match {
-            case MethodType(_, r) => r
+        class PolyExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
+          def apply(exprs: List[AbsExpr]): AbsExpr = {
+            val tree = c.typeCheck(Apply(tpe.member(newTermName("apply")), exprs.map(_.tree).toSeq: _*))
+            AbsExpr(tree, tree.tpe)
           }
         }
-
-        case class Poly1Expr(hf: ListExpr) {
- 
-          def apply(expr: AbsExpr): AbsExpr = {
-        
-            def test(tpe: Type): (Tree, Type, Type) = {
-              val (arg1Tpe, argImplTpe) =
-                tpe.baseType(typeOf[Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}].typeSymbol) match {
-                case TypeRef(_, _, List(arg1, argImpl)) => (arg1, argImpl)
-              }
-              val argImplTTpe = appliedType(argImplTpe, List(expr.tpe)).normalize
-              c.echo(c.enclosingPosition, "argImplTTpe " + argImplTTpe)
-              val found = c.inferImplicitValue(argImplTTpe)
-              (found, arg1Tpe, argImplTpe)
-            }
-
-            val poly = hf.find((t: Type) => {
-              val (found, arg1Tpe, argImplTpe) = test(t)
-              if(found == EmptyTree)
-                false
-              else
-                expr.tpe <:< appliedType(arg1Tpe, List(WildcardType))
-            })
-
-            val (found, arg1Tpe, argImplTpe) = test(poly.tpe)
-
-            def genApply[HF <: Poly1[Arg1, ArgImpl] forSome {type Arg1[X]; type ArgImpl[X]}: WeakTypeTag,
-                         T: WeakTypeTag, Arg1T: WeakTypeTag, ArgImplT: WeakTypeTag] = {
-              val reifee = reify{
-                c.Expr[HF](poly.tree).splice.apply[T](c.Expr[Arg1T](expr.tree).splice)(c.Expr[ArgImplT](found).splice)
-              }
-              c.echo(c.enclosingPosition, "Poly1 reifee " + show(reifee))
-              AbsExpr(reifee)
-            }
-            val tTpe = expr.tpe match {
-              case TypeRef(_, sym, List(t)) => t
-              case t if t =:= appliedType(arg1Tpe, List(t)) => t
-            }
-            genApply(c.WeakTypeTag(poly.tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))),
-              c.WeakTypeTag(appliedType(argImplTpe, List(tTpe))))
-          }
+        object PolyExpr {
+          def apply(e: AbsExpr) = new PolyExpr(e.tree, e.tpe)
         }
-        /*
-        class Poly2Expr(hf: ListExpr) {
-          
-          def apply(expr1: AbsExpr, expr2: AbsExpr): AbsExpr = {
- 
-            def getPolyTypes(hfTpe: Type): (Type, Type, Type) = {
-              val (arg1Tpe, arg2Tpe, argImplTpe) =
-                hfTpe.baseType(typeOf[Poly2[Arg1, Arg2, ArgImpl] forSome {type Arg1[X]; type Arg2[X]; type ArgImpl[X]}].typeSymbol) match {
-                case TypeRef(_, _, List(arg1, arg2, argImpl)) => (arg1, arg2, argImpl)
-              }
-              (arg1Tpe, arg2Tpe, argImplTpe)
-            }
 
-            val poly = hf.find((hfTpe: Type) => {
-              val (arg1Tpe, arg2Tpe, argImplTpe) = getPolyTypes(hfTpe)
-              val t1Tpe = expr1.tpe match {
-                case TypeRef(_, sym,  
-              }
-              if(found == EmptyTree)
-                false
-              else
-                expr1.tpe <:< appliedType(arg1Tpe, List(WildcardType)) &&
-                expr2.tpe <:< appliedType(arg2Tpe, List(WildcardType))
-            })
-
-            val (found, arg1Tpe, arg2Tpe, argImplTpe) = test(poly.tpe)
-
-            def genApply[HF <: Poly2[Arg1, Arg2, ArgImpl] forSome {
-                         type Arg1[X]; type Arg2[X]; type ArgImpl[X]}: WeakTypeTag,
-                         T: WeakTypeTag, Arg1T: WeakTypeTag, Arg2T: WeakTypeTag, ArgImplT: WeakTypeTag] = {
-              val reifee = reify{
-                c.Expr[HF](poly.tree).splice.apply[T](c.Expr[Arg1T](expr1.tree).splice,
-                                                      c.Expr[Arg2T](expr2.tree).splice)(c.Expr[ArgImplT](found).splice)
-              }
-              c.info(c.enclosingPosition, "Poly2 reifee " + show(reifee), false)
-              AbsExpr(reifee)
-            }
-            genApply(c.WeakTypeTag(poly.tpe), c.WeakTypeTag(tTpe), c.WeakTypeTag(appliedType(arg1Tpe, List(tTpe))),
-              c.WeakTypeTag(appliedType(arg2Tpe, List(tTpe))), c.WeakTypeTag(appliedType(argImplTpe, List(tTpe))))
-          }
-
-        }
-        */
-        
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
           def head: AbsExpr
           def tail: ListExpr
@@ -357,9 +277,10 @@ import Poly._
           def unify: ListExpr
           def startsWith(l: ListExpr): Expr[Boolean]
           def endsWith(l: ListExpr): Expr[Boolean]
-          def map(hf: ListExpr): ListExpr
+          //def map(hf: ListExpr): ListExpr
+          def map(hf: AbsExpr): ListExpr
           def flatten: ListExpr
-          def flatMap(hf: ListExpr): ListExpr
+          def flatMap(hf: AbsExpr): ListExpr
           def foldLeft(e: AbsExpr)(l: ListExpr): AbsExpr
           def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
           def reduceLeft(l: ListExpr): AbsExpr
@@ -653,19 +574,14 @@ import Poly._
 
           def endsWith(l: ListExpr): Expr[Boolean] = reverse.startsWith(l.reverse)
 
-          /** find applicable function in hf HList for each element of HList
-           *  e.g. for element of type X find Poly1[Arg1] such that
-           *  X <:< Arg1[_]
-           */
-
-          def map(hf: ListExpr): ListExpr = Poly1Expr(hf).apply(head) :: tail.map(hf)
+          def map(hf: AbsExpr): ListExpr = PolyExpr(hf).apply(List(head)) :: tail.map(hf)
 
           def count(hf: ListExpr): Expr[Int] =
             reify(c.Expr[List[Boolean]](map(hf).toList.tree).splice.map(b => if(b) 1 else 0).reduceLeft(_ + _))
 
           def flatten: ListExpr = ListExpr(head.tree, head.tpe) ++ tail.flatten
 
-          def flatMap(hf: ListExpr): ListExpr = map(hf).flatten
+          def flatMap(hf: AbsExpr): ListExpr = map(hf).flatten
 
           def reduceLeft(f: ListExpr): AbsExpr = {
             if(tail == HNilExpr)
@@ -800,9 +716,10 @@ import Poly._
             if(l == HNilExpr) reify(true) else reify(false)
           def endsWith(l: ListExpr): Expr[Boolean] =
             if(l == HNilExpr) reify(true) else reify(false)
-          def map(hf: ListExpr): ListExpr = HNilExpr
+          //def map(hf: ListExpr): ListExpr = HNilExpr
+          def map(hf: AbsExpr): ListExpr = HNilExpr
           def flatten: ListExpr = HNilExpr
-          def flatMap(hf: ListExpr): ListExpr = HNilExpr
+          def flatMap(hf: AbsExpr): ListExpr = HNilExpr
           def foldLeft(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = e
           def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
@@ -1013,9 +930,14 @@ import Poly._
       def filterNot[L <: HList: c.WeakTypeTag, E: c.WeakTypeTag](c: Context) =
         hListContext(c).ListExpr(c.Expr[L](c.prefix.tree)).filterNot(c.weakTypeOf[E]).toExpr
 
-      def map[L <: HList: c.WeakTypeTag, HF <: HList: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
+      def map[L <: HList: c.WeakTypeTag, HF: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
         val hl = hListContext(c)
-        (hl.ListExpr(c.Expr[L](c.prefix.tree)).map(hl.ListExpr(hf))).toExpr
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).map(hl.AbsExpr(hf))).toExpr
+      }
+
+      def flatMap[L <: HList: c.WeakTypeTag, HF: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).flatMap(hl.AbsExpr(hf))).toExpr
       }
 
       def flatten[L <: HList: c.WeakTypeTag](c: Context) =
