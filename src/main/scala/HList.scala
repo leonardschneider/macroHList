@@ -94,13 +94,16 @@ import Poly._
       def toArray: Any = macro HList.toArray[Self]
       def startsWith[L2 <: HList](l2: L2): Boolean = macro HList.startsWith[Self, L2]
       def endsWith[L2 <: HList](l2: L2): Boolean = macro HList.endsWith[Self, L2]
-      def count[HF <: HList](hf: HF): Int = macro HList.count[Self, HF]
+      def count[HF](hf: HF): Int = macro HList.count[Self, HF]
       def mkString(start: String, sep: String, end: String): String
       def mkString(sep: String): String
       def mkString: String
       def toTuple: Any = macro HList.toTuple[Self]
       def toClass: Any = macro HList.toClass[Self]
-      def reduce[F](f: F): Any = macro HList.reduce[Self, F]
+      def reduceLeft[F](f: F): Any = macro HList.reduceLeft[Self, F]
+      def reduceRight[F](f: F): Any = macro HList.reduceRight[Self, F]
+      def foldLeft[T, F](t: T)(f: F): Any = macro HList.foldLeft[Self, T, F]
+      def foldRight[T, F](t: T)(f: F): Any = macro HList.foldRight[Self, T, F]
     }
 
     case class ::[H, T <: HList](head: H, tail: T) extends HList {
@@ -143,95 +146,8 @@ import Poly._
       /** Enriched macro context with HList useful reification functions
        */
        
-      class HListContext[C <: Context](val c: C) {
+      class HListContext[C <: Context](override val c: C) extends RichContext(c) {
         import c.universe._
-
-        def isLiteral[T](expr: Expr[T]): Boolean = {
-          c.echo(c.enclosingPosition, "isLiteral: tpe " + tpeFromExpr(expr) + " tree " + showRaw(expr.tree))
-          expr.tree match {
-            case Literal(_) => true
-            case _ => false
-          }
-        }
-
-        def tpeFromExpr[T](expr: Expr[T]): Type =
-          if(expr.actualType == null) expr.staticType else expr.actualType.widen
-
-        class AbsExpr(val tree: Tree, val tpe: Type) {
-          def toExpr = c.Expr(tree)(c.WeakTypeTag(tpe))
-          def apply(arg1: AbsExpr): AbsExpr = {
-            def genApply[T: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
-              AbsExpr(reify(c.Expr[T => R](tree).apply(c.Expr[T](arg1.tree))))
-            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe))
-          }
-          def apply(arg1: AbsExpr, arg2: AbsExpr): AbsExpr = {
-            def genApply[T1: WeakTypeTag, T2: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
-              AbsExpr(reify(c.Expr[(T1, T2) => R](tree).apply(c.Expr[T1](arg1.tree), c.Expr[T2](arg2.tree))))
-            genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe), c.WeakTypeTag(arg2.tpe))
-          }
-          override def equals(expr: Any) = expr match {
-            case AbsExpr(tree2, tpe2) => tpe.widen =:= tpe2.widen && tree.equalsStructure(tree2)
-            case _ => false
-          }
-          override def hashCode = tree.hashCode + 41 * tpe.hashCode
-          override def toString = "AbsExpr(" + show(tree) + ": " + tpe + ")"
-        }
-        object AbsExpr {
-          def apply(tree: Tree, tpe: Type) = new AbsExpr(tree, tpe)
-          def apply[T: WeakTypeTag](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
-          def unapply(expr: AbsExpr): Option[(Tree, Type)] = Some((expr.tree, expr.tpe))
-        }
-
-        implicit def exprToAbs[T](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
-
-        class TupleExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
-          def first: AbsExpr = tpe match {
-            case TypeRef(_, tup, List(t1, t2)) => {
-              def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
-                AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._1))
-              genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
-            }
-          }
-          def second: AbsExpr = tpe match {
-            case TypeRef(_, tup, List(t1, t2)) => {
-              def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
-                AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._2))
-              genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
-            }
-          }
-        }
-        object TupleExpr {
-          def apply(e1: AbsExpr, e2: AbsExpr): TupleExpr = {
-            def genTuple[T1: WeakTypeTag, T2: WeakTypeTag]: TupleExpr =
-              new TupleExpr(
-                reify((c.Expr[T1](e1.tree).splice, c.Expr[T2](e2.tree).splice)).tree,
-                weakTypeOf[(T1, T2)]
-              )
-            genTuple(c.WeakTypeTag(e1.tpe), c.WeakTypeTag(e2.tpe))
-          }
-          def apply(e: AbsExpr): TupleExpr = {
-            def genTuple[T1: WeakTypeTag, T2: WeakTypeTag]: TupleExpr =
-              new TupleExpr(
-                reify((c.Expr[(T1, T2)](e.tree).splice._1, c.Expr[(T1, T2)](e.tree).splice._2)).tree,
-                weakTypeOf[(T1, T2)]
-              )
-            c.echo(c.enclosingPosition, "TupleExpr " + e.tpe)
-            e.tpe match {
-              case TypeRef(_, _, List(t1, t2)) =>
-                genTuple(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
-            }
-          }
-        }
-
-        class PolyExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
-          def apply(exprs: List[AbsExpr]): AbsExpr = {
-            val tree = c.typeCheck(Apply(tpe.member(newTermName("apply")), exprs.map(_.tree).toSeq: _*))
-            AbsExpr(tree, tree.tpe)
-          }
-        }
-        object PolyExpr {
-          def apply(e: AbsExpr) = new PolyExpr(e.tree, e.tpe)
-        }
 
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
           def head: AbsExpr
@@ -281,15 +197,15 @@ import Poly._
           def map(hf: AbsExpr): ListExpr
           def flatten: ListExpr
           def flatMap(hf: AbsExpr): ListExpr
-          def foldLeft(e: AbsExpr)(l: ListExpr): AbsExpr
-          def foldRight(e: AbsExpr)(l: ListExpr): AbsExpr
-          def reduceLeft(l: ListExpr): AbsExpr
-          def reduceRight(l: ListExpr): AbsExpr
+          def foldLeft(e: AbsExpr)(l: AbsExpr): AbsExpr
+          def foldRight(e: AbsExpr)(l: AbsExpr): AbsExpr
+          def reduceLeft(l: AbsExpr): AbsExpr
+          def reduceRight(l: AbsExpr): AbsExpr
           def reduce(f: AbsExpr): AbsExpr = {
             val res = treeBuild.mkMethodCall(f.tree, trees)
             AbsExpr(c.Expr(res))
           }
-          def count(hf: ListExpr): Expr[Int]
+          def count(hf: AbsExpr): Expr[Int]
           def toTuple: AbsExpr
           def toClass: AbsExpr
           def trees: List[Tree]
@@ -538,13 +454,6 @@ import Poly._
 
           def zipWithIndex: ListExpr = zip(reverseIndexes.reverse)
           
-          /*
-          protected def tpes: List[Type] = tail match {
-            case HNilExpr => List(head.tpe)
-            case hltail @ HListExpr(_, _) => head.tpe :: hltail.tpes
-          }
-          */
-
           def toList: AbsExpr = {
             def genList[A: WeakTypeTag]: AbsExpr =
               AbsExpr(reify(c.Expr[A](head.tree).splice :: c.Expr[List[A]](tail.toList.tree).splice))
@@ -576,44 +485,32 @@ import Poly._
 
           def map(hf: AbsExpr): ListExpr = PolyExpr(hf).apply(List(head)) :: tail.map(hf)
 
-          def count(hf: ListExpr): Expr[Int] =
-            reify(c.Expr[List[Boolean]](map(hf).toList.tree).splice.map(b => if(b) 1 else 0).reduceLeft(_ + _))
+          def count(hf: AbsExpr): Expr[Int] =
+            reify(
+              {
+                if(c.Expr[Boolean](PolyExpr(hf).apply(List(head)).tree).splice)
+                  1
+                else
+                  0
+              } + tail.count(hf).splice
+            )
+            //reify(c.Expr[List[Boolean]](map(hf).toList.tree).splice.map(b => if(b) 1 else 0).reduceLeft(_ + _))
 
           def flatten: ListExpr = ListExpr(head.tree, head.tpe) ++ tail.flatten
 
           def flatMap(hf: AbsExpr): ListExpr = map(hf).flatten
 
-          def reduceLeft(f: ListExpr): AbsExpr = {
+          def reduceLeft(hf: AbsExpr): AbsExpr =
             if(tail == HNilExpr)
               head
-            else {
-              def reduceFun(t1: Type, t2: Type): Type =
-                appliedType(typeOf[_ => _], List(
-                  appliedType(typeOf[(_, _)], List(t1, t2)),
-                  definitions.AnyTpe)
-                )
-              reduceLeft(f.find(reduceFun(head.tpe, tail.head.tpe)).apply(head, tail.head) :: tail.tail)
-            }
-          }
+            else
+              (PolyExpr(hf).apply(List(head, tail.head)) :: tail.tail).reduceLeft(hf)
 
-          def reduceRight(f: ListExpr): AbsExpr = {
-            if(tail == HNilExpr)
-              head
-            else {
-              def reduceFun(t1: Type, t2: Type): Type =
-                 appliedType(typeOf[_ => _], List(
-                  appliedType(typeOf[(_, _)], List(t1, t2)),
-                  definitions.AnyTpe)
-                )
-              reduceRight(f.find(reduceFun(last.tpe, init.last.tpe)).apply(last, init.last) :: init.init)
-            }
-          }
+          def reduceRight(hf: AbsExpr): AbsExpr = reverse.reduceLeft(PolyExpr(hf).reverse)
 
-          //def reduce(f: AbsExpr): AbsExpr = 
+          def foldLeft(e: AbsExpr)(f: AbsExpr): AbsExpr = (e :: this).reduceLeft(f)
 
-          def foldLeft(e: AbsExpr)(f: ListExpr): AbsExpr = (e :: this).reduceLeft(f)
-
-          def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = (this :+ e).reduceRight(f)
+          def foldRight(e: AbsExpr)(f: AbsExpr): AbsExpr = (this :+ e).reduceRight(f)
 
           def trees: List[Tree] = head.tree :: tail.trees
 
@@ -720,11 +617,11 @@ import Poly._
           def map(hf: AbsExpr): ListExpr = HNilExpr
           def flatten: ListExpr = HNilExpr
           def flatMap(hf: AbsExpr): ListExpr = HNilExpr
-          def foldLeft(e: AbsExpr)(f: ListExpr): AbsExpr = e
-          def foldRight(e: AbsExpr)(f: ListExpr): AbsExpr = e
-          def reduceLeft(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
-          def reduceRight(f: ListExpr): AbsExpr = sys.error("HNil can not be reduced")
-          def count(hf: ListExpr): Expr[Int] = reify(0)
+          def foldLeft(e: AbsExpr)(f: AbsExpr): AbsExpr = e
+          def foldRight(e: AbsExpr)(f: AbsExpr): AbsExpr = e
+          def reduceLeft(f: AbsExpr): AbsExpr = sys.error("HNil can not be reduced")
+          def reduceRight(f: AbsExpr): AbsExpr = sys.error("HNil can not be reduced")
+          def count(hf: AbsExpr): Expr[Int] = reify(0)
           def toTuple: AbsExpr = sys.error("HNil can not be converted to a tuple")
           def toClass: AbsExpr = sys.error("HNil can not be converted to a class instance")
           def trees: List[Tree] = Nil
@@ -1032,16 +929,33 @@ import Poly._
         (hl.ListExpr(c.Expr[L](c.prefix.tree)).endsWith(hl.ListExpr(l2)))   
       }
 
-      def count[L <: HList: c.WeakTypeTag, HF <: HList: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
+      def count[L <: HList: c.WeakTypeTag, HF: c.WeakTypeTag](c: Context)(hf: c.Expr[HF]) = {
         val hl = hListContext(c)
-        (hl.ListExpr(c.Expr[L](c.prefix.tree)).count(hl.ListExpr(hf)))   
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).count(hl.AbsExpr(hf)))   
       }
 
-      def reduce[L <: HList: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(f: c.Expr[F]) = {
+      def reduceLeft[L <: HList: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(f: c.Expr[F]) = {
         val hl = hListContext(c)
-        (hl.ListExpr(c.Expr[L](c.prefix.tree)).reduce(hl.AbsExpr(f))).toExpr 
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).reduceLeft(hl.AbsExpr(f))).toExpr 
       }
-     
+
+      def reduceRight[L <: HList: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(f: c.Expr[F]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).reduceRight(hl.AbsExpr(f))).toExpr 
+      }
+
+      def foldLeft[L <: HList: c.WeakTypeTag, T: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(
+        t: c.Expr[T])(f: c.Expr[F]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).foldLeft(hl.AbsExpr(t))(hl.AbsExpr(f))).toExpr 
+      }
+
+      def foldRight[L <: HList: c.WeakTypeTag, T: c.WeakTypeTag, F: c.WeakTypeTag](c: Context)(
+        t: c.Expr[T])(f: c.Expr[F]) = {
+        val hl = hListContext(c)
+        (hl.ListExpr(c.Expr[L](c.prefix.tree)).foldRight(hl.AbsExpr(t))(hl.AbsExpr(f))).toExpr 
+      }
+
       /** Converts a tuple of any arity to an HList.
        *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
        */
