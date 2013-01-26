@@ -11,6 +11,7 @@ import scala.reflect.ClassTag
 import TypeOperators._
 import Poly._
 
+
 //object HList {
 
     trait HList {
@@ -142,11 +143,8 @@ import Poly._
 
 
 
-    object HList {
-      /** Enriched macro context with HList useful reification functions
-       */
        
-      class HListContext[C <: Context](override val c: C) extends RichContext(c) {
+      trait HListContext extends RichContext {
         import c.universe._
 
         abstract class ListExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
@@ -765,7 +763,15 @@ import Poly._
 
       }
 
-      def hListContext(c: Context) = new HListContext[c.type](c)
+
+    object HList {
+          /** Enriched macro context with HList useful reification functions
+                 */
+
+      def hListContext(c0: Context) =
+        new {
+          val c: c0.type = c0
+        } with HListContext
 
       /** Now mapping functions working on AbsExpr to macro implementations
        *  which are working on plain Expr
@@ -958,6 +964,7 @@ import Poly._
 
       /** Converts a tuple of any arity to an HList.
        *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
+       *  Update: I've found a workaround by using existential type
        */
 
       def fromTuple[T](tup: T) = macro fromTupleImpl[T]
@@ -989,6 +996,8 @@ import Poly._
         hl.fromTraversable(hl.AbsExpr(list)).toExpr
       }
 
+ 
+  
   }
 
 //}
