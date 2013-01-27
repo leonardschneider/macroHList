@@ -1,0 +1,120 @@
+package macroHList
+
+import scala.language.implicitConversions
+
+import scala.reflect.macros.Context
+
+
+trait RichContext {
+
+  val c: Context
+  import c.universe._
+
+  def tpeFromExpr[T](expr: Expr[T]): Type =
+    if(expr.actualType == null) expr.staticType else expr.actualType.widen
+
+  class AbsExpr(val tree: Tree, val tpe: Type) {
+    def toExpr = c.Expr(tree)(c.WeakTypeTag(tpe))
+      def apply(arg1: AbsExpr): AbsExpr = {
+      def genApply[T: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
+        AbsExpr(reify(c.Expr[T => R](tree).apply(c.Expr[T](arg1.tree))))
+      genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe))
+    }
+    def apply(arg1: AbsExpr, arg2: AbsExpr): AbsExpr = {
+      def genApply[T1: WeakTypeTag, T2: WeakTypeTag, R: WeakTypeTag]: AbsExpr =
+        AbsExpr(reify(c.Expr[(T1, T2) => R](tree).apply(c.Expr[T1](arg1.tree), c.Expr[T2](arg2.tree))))
+      genApply(c.WeakTypeTag(tpe), c.WeakTypeTag(arg1.tpe), c.WeakTypeTag(arg2.tpe))
+    }
+    override def equals(expr: Any) = expr match {
+      case AbsExpr(tree2, tpe2) => tpe.widen =:= tpe2.widen && tree.equalsStructure(tree2)
+      case _ => false
+    }
+    override def hashCode = tree.hashCode + 41 * tpe.hashCode
+    override def toString = "AbsExpr(" + show(tree) + ": " + tpe + ")"
+  }
+  object AbsExpr {
+    def apply(tree: Tree, tpe: Type) = new AbsExpr(tree, tpe)
+      def apply[T: WeakTypeTag](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
+      def unapply(expr: AbsExpr): Option[(Tree, Type)] = Some((expr.tree, expr.tpe))
+    }
+
+  implicit def exprToAbs[T](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
+
+  class TupleExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
+    def first: AbsExpr = tpe match {
+      case TypeRef(_, tup, List(t1, t2)) => {
+        def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
+          AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._1))
+        genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
+      }
+    }
+    def second: AbsExpr = tpe match {
+      case TypeRef(_, tup, List(t1, t2)) => {
+        def genFirst[T1: WeakTypeTag, T2: WeakTypeTag]: AbsExpr =
+          AbsExpr(reify(c.Expr[(T1, T2)](tree).splice._2))
+        genFirst(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
+      }
+    }
+  }
+  object TupleExpr {
+    def apply(e1: AbsExpr, e2: AbsExpr): TupleExpr = {
+      def genTuple[T1: WeakTypeTag, T2: WeakTypeTag]: TupleExpr =
+        new TupleExpr(
+        reify((c.Expr[T1](e1.tree).splice, c.Expr[T2](e2.tree).splice)).tree,
+        weakTypeOf[(T1, T2)]
+        )
+      genTuple(c.WeakTypeTag(e1.tpe), c.WeakTypeTag(e2.tpe))
+    }
+    def apply(e: AbsExpr): TupleExpr = {
+      def genTuple[T1: WeakTypeTag, T2: WeakTypeTag]: TupleExpr =
+        new TupleExpr(
+          reify((c.Expr[(T1, T2)](e.tree).splice._1, c.Expr[(T1, T2)](e.tree).splice._2)).tree,
+          weakTypeOf[(T1, T2)]
+        )
+      c.echo(c.enclosingPosition, "TupleExpr " + e.tpe)
+      e.tpe match {
+        case TypeRef(_, _, List(t1, t2)) =>
+        genTuple(c.WeakTypeTag(t1), c.WeakTypeTag(t2))
+      }
+    }
+  }
+
+  class PolyExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
+    def apply(exprs: List[AbsExpr]): AbsExpr = {
+      //val tree = c.typeCheck(Apply(tpe.member(newTermName("apply")), exprs.map(_.tree).toSeq: _*))
+      // Dunno why I have to do this, but else it crashes when passing lambda directly as arguments of map
+      /*val applySym = tpe.member(newTermName("apply")).asMethod
+      val argSyms = applySym.paramss.flatten
+      val funTree = Function(argSyms.map(ValDef(_)), treeBuild.mkMethodCall(applySym, argSyms.map(s =>
+          treeBuild.mkAttributedIdent(s)
+      )))
+      c.echo(NoPosition, "funTree:\n" + funTree)*/
+      //val resTree = Apply(tree, exprs.map(_.tree))
+      val resTree = Apply(tree, exprs.map(_.tree))
+      //val resTree = treeBuild.mkMethodCall(c.typeCheck(tree).symbol, exprs.map(_.tree))
+      val resTpe = c.typeCheck(Apply(tree, exprs.map(_.tree))).tpe
+      c.echo(NoPosition, "resTree:\n" + resTree)
+      c.echo(NoPosition, "resTpe: " + resTpe)
+      AbsExpr(resTree, resTpe)
+      
+    }
+    def reverse: PolyExpr = new PolyExpr(tree, tpe) {
+      override def apply(exprs: List[AbsExpr]): AbsExpr = super.apply(exprs.reverse)
+    }
+  }
+  object PolyExpr {
+    def apply(e: AbsExpr) = {
+      val res = e match {
+        case e: PolyExpr => e
+        case _ => new PolyExpr(e.tree, e.tpe)
+      }
+      c.echo(NoPosition, "PolyExpr tpe: " + res.tpe)
+      c.echo(NoPosition, "PolyExpr tree:\n" + res.tree)
+      c.echo(NoPosition, "PolyExpr apply tpe: " + res.tpe.member(newTermName("apply")).asMethod.typeSignature)
+      res
+    }
+
+  }
+}
+
+
