@@ -420,8 +420,8 @@ import Poly._
           def unzip: TupleExpr = {
             val headTup = TupleExpr(head)
             val tailTup = tail.unzip
-            TupleExpr(headTup.first :: ListExpr(tailTup.first), 
-                      headTup.second :: ListExpr(tailTup.second))
+            TupleExpr(headTup(1) :: ListExpr(tailTup(1)), 
+                      headTup(2) :: ListExpr(tailTup(2)))
           }
 
           def updated(i: Expr[Int], e: AbsExpr): ListExpr = {
@@ -642,38 +642,8 @@ import Poly._
             HNilExpr
         }
 
-        /**
-         *  TODO: once SI-5923 is fixed, an implicit conversion function can be defined on Tuples ;))
-         */
-
-        def fromTuple(tup: AbsExpr): ListExpr = {
-          // get the tuple symbol tupleX
-          val tupSymOption = tup.tpe.baseClasses.find(_.fullName.matches("scala.Tuple[0-9]+"))
-          if(!tupSymOption.isDefined) {
-            c.info(NoPosition, "Not a tuple, returning single element ListExpr",
-              System.getProperty("force", "false").toBoolean)
-            return tup :: HNilExpr
-          }
-          val tupSym = tupSymOption.get
-          c.info(NoPosition, "Found tuple type: " + tupSym, System.getProperty("force", "false").toBoolean)
-          // get the tuple arity
-          val tupArity = tupSym.fullName.drop("scala.Tuple".length).toInt
-          c.info(NoPosition, "Tuple has arity: " + tupArity, System.getProperty("force", "false").toBoolean)
-          // get tuple element trees
-          val tupTrees = (1 to tupArity).map(i =>
-            treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(newTermName("_" + i))))
-          c.info(NoPosition, "Building tuple trees:\n" + tupTrees.mkString("\n"),
-            System.getProperty("force", "false").toBoolean)
-          // get tuple element types
-          val tupTpes = tup.tpe match {
-            case TypeRef(_, _, tpes) => tpes
-          }
-          // transform tuple trees and types to AbsExpr and build the ListExpr
-          val res =
-          tupTrees.zip(tupTpes).map{case ((expr, tpe)) => AbsExpr(expr, tpe)}.foldRight(HNilExpr: ListExpr)(_ :: _)
-          c.info(NoPosition, "Generated ListExpr: " + res, System.getProperty("force", "false").toBoolean)
-          res
-        }
+        def fromTuple(tup: AbsExpr): ListExpr =
+          TupleExpr.fromTuple(tup).exprs.foldRight(HNilExpr: ListExpr)(_ :: _)
 
         /** Generate an HList with class constructor at its head and constructor arguments as tail.
          *  TODO: Recursive on args, as long as it can, i.e. a unique apply and unapply function is found
