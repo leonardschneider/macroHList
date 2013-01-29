@@ -3,7 +3,7 @@ macroHList
 
 A macro implementation of HList
 
-WORK IN PROGRESS
+**WORK IN PROGRESS**
 
 # How to use
 
@@ -42,7 +42,10 @@ res4: (Double, String, Int) = (3.0,two,1)
 
 ## Function Cached Macro
 
-```
+For (pure) function memoization, you can use the cached macro just before the function definition, as
+show after.
+
+```scala
 Welcome to Scala version 2.10.0 (Java HotSpot(TM) 64-Bit Server VM, Java 1.6.0_37).
 Type in expressions to have them evaluated.
 Type :help for more information.
