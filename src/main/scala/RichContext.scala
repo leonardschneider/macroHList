@@ -40,6 +40,41 @@ trait RichContext extends Macro {
 
   implicit def exprToAbs[T](expr: Expr[T]): AbsExpr = new AbsExpr(expr.tree, tpeFromExpr(expr))
 
+  case class TupleExpr(exprs: AbsExpr*) {
+    def length = exprs.length
+    def trees = exprs.map(_.tree).toList
+    def tpes = exprs.map(_.tpe).toList
+    def apply(i: Int) = exprs(i - 1)
+    def toAbsExpr = {
+      val tupSym = rootMirror.staticModule("scala.Tuple" + length)
+      val tupTree = treeBuild.mkMethodCall(tupSym, newTermName("apply"), tpes, trees)
+      AbsExpr(tupTree, c.typeCheck(tupTree).tpe)
+    }
+    def toExpr = toAbsExpr.toExpr
+  }
+  object TupleExpr {
+    def fromTuple(tup: AbsExpr): TupleExpr = {
+      // get the tuple symbol tupleX
+      val tupSymOption = tup.tpe.baseClasses.find(_.fullName.matches("scala.Tuple[0-9]+"))
+      if(!tupSymOption.isDefined)
+        c.error(NoPosition, "" + tup.tpe + " is not a tuple")
+      val tupSym = tupSymOption.get
+      // get the tuple arity
+      val tupArity = tupSym.fullName.drop("scala.Tuple".length).toInt
+      // get tuple element trees
+      val tupTrees = (1 to tupArity).map(i =>
+        treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(newTermName("_" + i))))
+      // get tuple element types
+      val tupTpes = tup.tpe match {
+        case TypeRef(_, _, tpes) => tpes
+      }
+      new TupleExpr((tupTrees zip tupTpes).map{case (tree, tpe) => AbsExpr(tree, tpe)}: _*)
+    }
+  }
+  implicit def tupleExprToAbsExpr(t: TupleExpr): AbsExpr = t.toAbsExpr
+
+
+/*
   class TupleExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
     def first: AbsExpr = tpe match {
       case TypeRef(_, tup, List(t1, t2)) => {
@@ -78,6 +113,7 @@ trait RichContext extends Macro {
       }
     }
   }
+  */
 
   class PolyExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
     def apply(exprs: List[AbsExpr]): AbsExpr = {
