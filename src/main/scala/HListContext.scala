@@ -288,8 +288,8 @@ trait HListContext extends RichContext {
     def unzip: TupleExpr = {
       val headTup = TupleExpr(head)
       val tailTup = tail.unzip
-      TupleExpr(headTup.first :: ListExpr(tailTup.first), 
-                headTup.second :: ListExpr(tailTup.second))
+      TupleExpr(headTup(1) :: ListExpr(tailTup(1)), 
+                headTup(2) :: ListExpr(tailTup(2)))
     }
 
     def updated(i: Expr[Int], e: AbsExpr): ListExpr = {

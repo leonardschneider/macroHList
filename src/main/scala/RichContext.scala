@@ -47,7 +47,7 @@ trait RichContext extends Macro {
     def apply(i: Int) = exprs(i - 1)
     def toAbsExpr = {
       val tupSym = rootMirror.staticModule("scala.Tuple" + length)
-      val tupTree = treeBuild.mkMethodCall(tupSym, newTermName("apply"), tpes, trees)
+      val tupTree = treeBuild.mkMethodCall(tupSym, TermName("apply"), tpes, trees)
       AbsExpr(tupTree, c.typeCheck(tupTree).tpe)
     }
     def toExpr = toAbsExpr.toExpr
@@ -63,7 +63,7 @@ trait RichContext extends Macro {
       val tupArity = tupSym.fullName.drop("scala.Tuple".length).toInt
       // get tuple element trees
       val tupTrees = (1 to tupArity).map(i =>
-        treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(newTermName("_" + i))))
+        treeBuild.mkAttributedSelect(tup.tree, tup.tpe.member(TermName("_" + i))))
       // get tuple element types
       val tupTpes = tup.tpe match {
         case TypeRef(_, _, tpes) => tpes
@@ -117,9 +117,9 @@ trait RichContext extends Macro {
 
   class PolyExpr(tree: Tree, tpe: Type) extends AbsExpr(tree, tpe) {
     def apply(exprs: List[AbsExpr]): AbsExpr = {
-      //val tree = c.typeCheck(Apply(tpe.member(newTermName("apply")), exprs.map(_.tree).toSeq: _*))
+      //val tree = c.typeCheck(Apply(tpe.member(TermName("apply")), exprs.map(_.tree).toSeq: _*))
       // Dunno why I have to do this, but else it crashes when passing lambda directly as arguments of map
-      /*val applySym = tpe.member(newTermName("apply")).asMethod
+      /*val applySym = tpe.member(TermName("apply")).asMethod
       val argSyms = applySym.paramss.flatten
       val funTree = Function(argSyms.map(ValDef(_)), treeBuild.mkMethodCall(applySym, argSyms.map(s =>
           treeBuild.mkAttributedIdent(s)
@@ -146,7 +146,7 @@ trait RichContext extends Macro {
       }
       c.echo(NoPosition, "PolyExpr tpe: " + res.tpe)
       c.echo(NoPosition, "PolyExpr tree:\n" + res.tree)
-      c.echo(NoPosition, "PolyExpr apply tpe: " + res.tpe.member(newTermName("apply")).asMethod.typeSignature)
+      c.echo(NoPosition, "PolyExpr apply tpe: " + res.tpe.member(TermName("apply")).asMethod.typeSignature)
       res
     }
 
