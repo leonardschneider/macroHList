@@ -7,17 +7,15 @@ import scala.language.higherKinds
 
 import scala.reflect.macros.Context
 
+trait ImplicitTupleContext extends HListContext {
+  def mkTuple(tup: c.Expr[T forSome {type T}]) =
+    fromTuple(AbsExpr(tup)).toExpr
+}
+
 object Implicits {
 
-  implicit def tupleToHList(tup: T forSome {type T}): R forSome {type R <: HList} = macro tupleToHListImpl
-
-  def tupleToHListImpl(c: Context)(tup: c.Expr[T forSome {type T}]) = {
-    import c.universe._
-
-    import HList._
-    val hl = hListContext(c)
-    hl.fromTuple(hl.AbsExpr(tup)).toExpr
-  }
+  implicit def tupleToHList(tup: T forSome {type T}): R forSome {type R <: HList} =
+    macro ImplicitTupleContext.mkTuple
 
 }
 

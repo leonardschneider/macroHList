@@ -3,11 +3,11 @@ package macroHList
 import scala.language.implicitConversions
 
 import scala.reflect.macros.Context
+import scala.reflect.macros.Macro
 
+trait RichContext extends Macro {
 
-trait RichContext {
-
-  val c: Context
+  //val c: Context
   import c.universe._
 
   def tpeFromExpr[T](expr: Expr[T]): Type =
